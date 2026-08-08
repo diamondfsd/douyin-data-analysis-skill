@@ -1,0 +1,8 @@
+# Analysis output (not part of the skill)
+douyin_analysis_*/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
