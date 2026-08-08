@@ -1,6 +1,6 @@
 # 抖音数据分析 Skill
 
-基于 `agent-browser` 的抖音创作者中心数据自动化读取与分析工作流。
+基于 `agent-browser` 的抖音创作者中心数据自动化读取与分析工作流。适用于任何支持浏览器自动化的 AI Agent 平台。
 
 ## 功能
 
@@ -30,13 +30,26 @@ douyin-data-analysis-skill/
 - Python 3（用于数据汇总脚本）
 - 抖音创作者账号（需扫码登录一次）
 
+## 平台适配
+
+本技能的核心是两个 Shell 脚本（取数 + 登录恢复）和一个 SKILL.md（工作流定义），不绑定特定平台。`SKILL.md` 中描述的 AI 分析步骤（Step 5）是通用逻辑，任何能读文件、写 HTML 的 AI Agent 都能执行。
+
+| 平台 | 接入方式 |
+|------|---------|
+| **WorkBuddy** | 将目录放入 `~/.workbuddy/skills/douyin-data-analysis/`，对话中触发即可 |
+| **Claude Code / Cursor / Windsurf 等** | 将 `SKILL.md` 作为自定义指令或 system prompt 加载，脚本路径用绝对路径引用 |
+| **其他 Agent 框架**（LangChain / AutoGPT 等） | 把 `SKILL.md` 作为 task description 注入，调用脚本获取 `douyin_data.json` 后交给 LLM 分析 |
+| **纯命令行** | 手动跑脚本取数，自行用 `douyin_data.json` 做分析 |
+
+> **注意**：`SKILL.md` 中部分内容（如 `present_files` 工具调用、交互红线规范）是 WorkBuddy 环境特有的。在其他平台使用时，这些部分可忽略或替换为对应平台的文件展示/用户交互机制，核心取数脚本不受影响。
+
 ## 使用方式
 
-### 在 WorkBuddy 中使用
+### 方式一：作为 AI Agent 技能使用
 
-将 `SKILL.md` 所在目录放入 `~/.workbuddy/skills/douyin-data-analysis/`，然后在对话中说「帮我分析抖音数据」即可触发。
+将 `SKILL.md` 加载到你的 AI Agent 上下文中，然后直接说「帮我分析抖音数据」，Agent 会按工作流自动完成取数和分析。
 
-### 独立使用
+### 方式二：纯命令行独立使用
 
 ```bash
 # 1. 恢复登录态（首次需扫码）
@@ -47,6 +60,11 @@ WS=./output bash scripts/analyze_douyin.sh
 
 # 3. 读取 output/douyin_analysis_*/douyin_data.json 进行分析
 ```
+
+取数完成后，`douyin_data.json` 包含结构化的核心指标和逐视频明细，你可以：
+- 交给任意 LLM（ChatGPT / Claude / DeepSeek 等）生成分析报告
+- 用 Python / Excel 自行做数据可视化
+- 导入 BI 工具做长期跟踪
 
 ## 数据来源
 
