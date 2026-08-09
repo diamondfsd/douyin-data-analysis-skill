@@ -37,12 +37,22 @@ is_login() {
   [[ "$out" == *"true"* ]]
 }
 
+# 页面可能仍在渲染；短轮询 DOM 即可，不等待容易拖满超时的 networkidle。
+wait_for_login() {
+  for _ in 1 2 3 4 5 6; do
+    if is_login; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  return 1
+}
+
 # 1) 确保浏览器已打开首页（复用 daemon，不新建）
 agent-browser --session-name "$SESSION" open "https://creator.douyin.com/creator-micro/home" >/dev/null 2>&1 || true
-agent-browser --session-name "$SESSION" wait --load networkidle >/dev/null 2>&1 || true
 
 # 2) 已登录则直接返回（最常见：上次已注入且 cookie 未过期）
-if is_login; then
+if wait_for_login; then
   echo "ALREADY_LOGGED_IN"
   exit 0
 fi
@@ -93,9 +103,8 @@ PY
 
 # 5) reload 并再次验证登录
 agent-browser --session-name "$SESSION" reload >/dev/null 2>&1 || true
-agent-browser --session-name "$SESSION" wait --load networkidle >/dev/null 2>&1 || true
 
-if is_login; then
+if wait_for_login; then
   echo "RESTORED_LOGIN"
   exit 0
 else

@@ -3,16 +3,15 @@
 # analyze_douyin.sh —— 抖音数据一键取数 + 汇总（纯数据，不含分析/报告）
 #
 # 职责边界（重要）：
-#   * 本脚本【只】做三件事：恢复登录 → 抓取原始接口 → 汇总成 douyin_data.json
-#     + 后台截图。不做任何分析、不生成 HTML、不写死结论。
+#   * 本脚本【只】做三件事：恢复登录 → 抓取原始接口 → 汇总成 douyin_data.json。
+#     不做截图、不做分析、不生成 HTML、不写死结论。
 #   * 详细的趋势解读、逐视频分析、指导性建议、以及最终的 HTML 单页报告，
-#     全部由【AI agent】读取 douyin_data.json + 截图后生成（见 SKILL.md Step 5）。
+#     全部由【AI agent】读取 douyin_data.json 后生成（见 SKILL.md Step 5）。
 #
 # 用法：
 #   WS=/path/to/out bash scripts/analyze_douyin.sh
 # 输出：<WS>/douyin_analysis_<TS>/
 #        overview.json  items.json          （原始接口响应，留底）
-#        dashboard_<TS>.png  content_<TS>.png （后台截图，供 AI 嵌入报告）
 #        douyin_data.json                    （汇总 + 部分明细，AI 读取的主数据）
 # ============================================================================
 
@@ -26,48 +25,72 @@ TS=$(date +%Y%m%d_%H%M%S)
 OUT="$WS/douyin_analysis_${TS}"
 mkdir -p "$OUT"
 
-echo "==> [1/4] 恢复登录态（无扫码优先）"
+echo "==> [1/3] 恢复登录态（无扫码优先）"
 bash "$SCRIPT_DIR/restore_douyin_login.sh" || { echo "登录失败，请先扫码登录。"; exit 1; }
 
-# 抓取某个接口的原始响应体，存到 $2
+# 首页会同时请求 overview/all 和 item/list。复用登录恢复时已经打开的首页；
+# 仅当资源记录不存在时才重新加载，然后复用签名 URL 发起同源 fetch。
+wait_for_endpoint() {
+  local filter="$1" found=""
+  for _ in 1 2 3 4 5 6 7 8; do
+    found=$(agent-browser --session-name "$SESSION" eval \
+      "performance.getEntriesByType('resource').some(e => e.name.includes('$filter'))" 2>/dev/null || true)
+    if [[ "$found" == *"true"* ]]; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  return 1
+}
+
+has_core_requests=$(agent-browser --session-name "$SESSION" eval \
+  "['overview/all', 'item/list'].every(f => performance.getEntriesByType('resource').some(e => e.name.includes(f)))" \
+  2>/dev/null || true)
+if [[ "$has_core_requests" != *"true"* ]]; then
+  agent-browser --session-name "$SESSION" open "https://creator.douyin.com/creator-micro/home" >/dev/null 2>&1
+fi
+
 grab() {
   local filter="$1" out="$2"
-  agent-browser --session-name "$SESSION" network requests --clear >/dev/null 2>&1
-  agent-browser --session-name "$SESSION" open "https://creator.douyin.com/creator-micro/home" >/dev/null 2>&1
-  sleep 5
-  local js rid
-  js=$(agent-browser --session-name "$SESSION" network requests --filter "$filter" --json 2>/dev/null)
-  rid=$(echo "$js" | grep -oE '"requestId":"[^"]*"' | head -1 | sed 's/"requestId":"//; s/"$//')
-  if [ -n "$rid" ]; then
-    agent-browser --session-name "$SESSION" network request "$rid" --json > "$out"
+  if ! wait_for_endpoint "$filter"; then
+    echo "    [警告] 未找到接口: $filter"
+    return 1
+  fi
+
+  agent-browser --session-name "$SESSION" eval "(async () => {
+    const urls = performance.getEntriesByType('resource')
+      .map(e => e.name)
+      .filter(url => url.includes('$filter'));
+    const response = await fetch(urls[urls.length - 1], {credentials: 'include'});
+    return {data: {responseBody: await response.text()}};
+  })()" > "$out"
+
+  if "$PYTHON_BIN" - "$out" <<'PY'
+import json, sys
+raw = json.load(open(sys.argv[1]))
+body = raw.get("data", {}).get("responseBody") if isinstance(raw, dict) else None
+if not body:
+    raise SystemExit(1)
+json.loads(body) if isinstance(body, str) else body
+PY
+  then
     echo "    抓取成功: $out"
   else
-    echo "    [警告] 未找到接口: $filter"
+    echo "    [警告] 接口响应无有效数据: $filter"
+    return 1
   fi
 }
 
-echo "==> [2/4] 抓取 overview/all + item/list（收入接口已移除：账号未开通变现时为 0，无意义）"
+echo "==> [2/3] 抓取 overview/all + item/list"
 grab "overview/all" "$OUT/overview.json"
 grab "item/list"    "$OUT/items.json"
 
-echo "==> [3/4] 后台截图（供 AI 生成报告时图文并茂）"
-agent-browser --session-name "$SESSION" open "https://creator.douyin.com/creator-micro/home" >/dev/null 2>&1
-sleep 4
-agent-browser --session-name "$SESSION" screenshot "$OUT/dashboard_${TS}.png" 2>/dev/null \
-  && echo "    截图: $OUT/dashboard_${TS}.png"
-agent-browser --session-name "$SESSION" open "https://creator.douyin.com/creator-micro/content/manage" >/dev/null 2>&1
-sleep 4
-agent-browser --session-name "$SESSION" screenshot "$OUT/content_${TS}.png" 2>/dev/null \
-  && echo "    截图: $OUT/content_${TS}.png"
-
-echo "==> [4/4] 汇总原始数据 → douyin_data.json（仅数据，不含分析）"
-DASH_PNG="dashboard_${TS}.png"
-CONTENT_PNG="content_${TS}.png"
-"$PYTHON_BIN" - "$OUT" "$DASH_PNG" "$CONTENT_PNG" <<'PY'
+echo "==> [3/3] 汇总原始数据 → douyin_data.json（仅数据，不含分析）"
+"$PYTHON_BIN" - "$OUT" <<'PY'
 import json, sys, os
 from datetime import datetime
 
-OUT, DASH_PNG, CONTENT_PNG = sys.argv[1], sys.argv[2], sys.argv[3]
+OUT = sys.argv[1]
 
 def load(name):
     p = os.path.join(OUT, name)
@@ -159,7 +182,6 @@ data = {
     "meta": {
         "generated_at": datetime.now().strftime('%Y-%m-%d %H:%M'),
         "period": "近7天",
-        "screenshots": {"dashboard": DASH_PNG, "content": CONTENT_PNG},
     },
     "overview": overview,
     "videos": videos,

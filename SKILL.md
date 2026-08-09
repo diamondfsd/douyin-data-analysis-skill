@@ -1,7 +1,6 @@
 ---
 name: douyin-data-analysis
 description: 抖音数据分析与复盘工作流。通过 agent-browser 辅助登录抖音创作者中心，正常读取数据中心的各项运营数据（播放量/粉丝/互动/作品），进行自动化分析和报告生成。全程通过创作者中心官方页面完成，仅读取用户本人已授权可见的数据。
-agent_created: true
 ---
 
 # 抖音数据分析与复盘（实战版）
@@ -10,8 +9,8 @@ agent_created: true
 
 基于 `agent-browser` CLI 的抖音数据读取工作流，分两个阶段、职责严格分离：
 
-- **阶段一（脚本 `analyze_douyin.sh`）只做取数 + 汇总**：恢复登录 → 抓 `overview/all` + `item/list` 原始接口 → 后台截图 → 把数据汇总成 `douyin_data.json`（含核心指标汇总 + 逐视频明细）+ 两张后台截图。**脚本不做任何分析、不生成 HTML、不写死结论。**
-- **阶段二（AI agent）读取 `douyin_data.json` + 截图，生成完整 HTML 单页报告**：趋势解读、逐视频详细分析、数据驱动的指导性建议、Chart.js 图表、图文嵌入全部由 AI 完成（见 Step 5）。
+- **阶段一（脚本 `analyze_douyin.sh`）只做取数 + 汇总**：恢复登录 → 首页加载一次 → 抓 `overview/all` + `item/list` 原始接口 → 汇总成 `douyin_data.json`（含核心指标汇总 + 逐视频明细）。**脚本不截图、不做分析、不生成 HTML。**
+- **阶段二（AI agent）只读取 `douyin_data.json`，生成完整 HTML 单页报告**：趋势解读、逐视频详细分析、数据驱动的建议和图表全部由 AI 完成（见 Step 5）。生成后直接交付，不做视觉验收。
 
 全程走创作者中心官方页面，只读取用户本人已授权可见的数据。**登录态复用靠 `scripts/restore_douyin_login.sh` 把已保存的登录 cookie 注入浏览器（见下「登录态恢复（关键）」），一次扫码后基本可长期免扫码。**
 
@@ -20,9 +19,9 @@ agent_created: true
 - **登录态恢复用 `scripts/restore_douyin_login.sh`，别迷信 `--session-name` 的"自动恢复"**：`--session-name <name>` 在 `close` 时**确实**会把 cookies 存到 `~/.agent-browser/sessions/<name>-default.json`，但重新 `open` 时**不会把登录 cookie 注入浏览器**（实测：文件里有未过期的 `sid_tt`/`sessionid`，浏览器却仍是匿名态）。外部流传的 `agent-browser --session <id> --restore` 写法在当前版本**不存在**（`--restore` 不是有效 flag；`--session` 是隔离会话、不自动保存）。正确做法：跑 `bash scripts/restore_douyin_login.sh`——已登录就直接用；未登录就从 session 文件把 cookie 逐个 `cookies set` 注入、reload 即恢复，免去重复扫码。
 - **无头 + 截图给用户扫码**：不需要开有头窗口。无头模式打开 → 截图 → **用 `present_files` 把二维码图真正展示给用户**（仅 `Read` 自己看没用，用户看不到）。用户扫完告诉我，我拿到数据后关掉即可，下次 `--session-name` 自动恢复。
 - **后续操作复用 daemon**：同一次任务内不要 `close`，多个页面间直接用 `open` 导航（会复用已有浏览器）。**任务结束才 `close`**。
-- **数据提取优先级：原始 JSON > 解析 DOM > 截图**。截图只用于肉眼确认，绝不拿来做数据来源（费 token 且不可分析）。优先用 `network requests` 获取接口 `responseBody`，详见 Step 4 与「JSON 字段参考」。
+- **数据提取优先级：原始 JSON > 解析 DOM**。除登录二维码外不截图。首页同时触发两个核心接口，只加载一次并复用已签名的同源请求，详见 Step 4。
 - **先执行、报错再处理（用户明确要求）**：不要每次都先用 `which` / `ls` 预先检测 `agent-browser` 是否安装、路径在哪。直接跑命令，只有命令真的报错（如 `command not found`、登录态失效）时才去排查或安装。这样能省掉一个永远多余的预检步骤。
-- **生成的文件必须带时间戳后缀（用户明确要求）**：所有 `screenshot` 落盘的文件名都要带 `_YYYYMMDD_HHMMSS` 时间戳，避免覆盖、便于追溯、区分每次扫码。生成时间戳用 shell：`TS=$(date +%Y%m%d_%H%M%S)`，文件名形如 `douyin_qrcode_${TS}.png`。注意：时间戳文件仅用于向用户展示二维码，不是数据来源。
+- **唯一允许的截图是登录二维码**：仅在确实需要扫码时生成 `douyin_qrcode_<TS>.png`。数据后台和最终报告都不截图、不读图、不做桌面或移动端复核。
 
 ## 使用声明
 
@@ -65,7 +64,7 @@ bash scripts/restore_douyin_login.sh
 
 > **关键红线**：恢复登录时**千万不要 `close` 当前浏览器再重开**——当前若是匿名态，`close` 会把匿名状态覆盖进 session 文件、毁掉里面完好的登录 cookie。直接对"当前浏览器"注入 cookie 即可。
 
-一键取数（恢复登录 + 抓取 + 汇总）：`bash scripts/analyze_douyin.sh`（输出到 `$WS` 或当前目录的 `douyin_analysis_<TS>/`，产物为 `douyin_data.json` + 两张截图）。**报告不是脚本生成的**——AI 拿到 `douyin_data.json` 后按 Step 5 生成 HTML。
+一键取数（恢复登录 + 单次加载首页 + 抓取 + 汇总）：`bash scripts/analyze_douyin.sh`（输出到 `$WS` 或当前目录的 `douyin_analysis_<TS>/`，产物为 `overview.json`、`items.json`、`douyin_data.json`）。**报告不是脚本生成的**——AI 拿到 `douyin_data.json` 后按 Step 5 生成 HTML。
 
 **自动存档（跨会话可用）**：每次取数后，脚本自动将 `douyin_data.json` + `items.json` 复制到 `$WS/douyin_archive/<TS>/` 并更新 `$WS/douyin_archive/index.json`。后续会话做分析时，AI 先读 `index.json` 即可发现所有历史快照，无需依赖上一次会话的 `douyin_analysis_*/` 目录。
 
@@ -90,11 +89,12 @@ $WS/douyin_archive/
 # 打开（无头，用 session 名持久化）
 agent-browser --session-name douyin open "https://creator.douyin.com/creator-micro/home"
 
-# 等待页面加载完成
-agent-browser wait --load networkidle
+# 短暂等待二维码渲染，不等待 networkidle
+agent-browser wait 1000
 
 # 截图给用户扫码（放到工作目录）
-agent-browser screenshot <workspace>/douyin_qrcode.png
+TS=$(date +%Y%m%d_%H%M%S)
+agent-browser screenshot <workspace>/douyin_qrcode_${TS}.png
 ```
 
 截图保存后，**必须立即调用 `present_files` 把该 PNG 展示给用户**（这是用户能看到二维码的唯一方式；只 `Read` 自己看或文字描述都无效）。展示后用中文提醒一句即可：「请用抖音 App 扫码登录，扫完告诉我」——**仅此一句，不要加任何补充说明**。
@@ -108,7 +108,7 @@ agent-browser screenshot <workspace>/douyin_qrcode.png
 ```bash
 # 刷新，确保拿到最新登录态
 agent-browser --session-name douyin reload
-agent-browser wait --load networkidle
+agent-browser wait 1000
 
 # 读 DOM：判断是登录页还是后台（核心判断逻辑）
 agent-browser --session-name douyin eval "(() => {
@@ -150,16 +150,18 @@ agent-browser --session-name douyin eval "!!document.querySelector('canvas, [cla
 ```bash
 # 直接导航（复用已有浏览器，不新建窗口）
 agent-browser --session-name douyin open "https://creator.douyin.com/creator-micro/data-center/operation"
-agent-browser wait --load networkidle
+agent-browser wait 1000
 
 # 或用左侧菜单点击（先 snapshot 拿 ref）
 agent-browser --session-name douyin snapshot -i
 agent-browser --session-name douyin click <menuitem_ref>
 ```
 
-### Step 4：提取数据（P0：拿原始 JSON；截图只在必要肉眼确认时用）
+### Step 4：提取数据（P0：拿原始 JSON）
 
-> **优先级铁律**：数据提取 **第一选择永远是「抓接口原始 JSON」**（路 A）。截图只能用于「肉眼确认页面长啥样」，绝不作为数据来源。DOM 解析（路 B）是接口拿不到时的兜底。
+> **优先级铁律**：数据提取 **第一选择永远是「抓接口原始 JSON」**（路 A）。DOM 解析（路 B）是接口拿不到时的兜底。除登录二维码外，不生成任何截图。
+
+**性能规则**：首页会同时触发 `overview/all` 和 `item/list`。调用 `scripts/analyze_douyin.sh` 时只加载一次首页；脚本短轮询资源列表，接口出现后立即抓取，不为每个接口重复 `open`，也不使用固定 5 秒等待。
 
 #### 路 A：获取接口返回的原始 JSON（P0 首选，最干净、自带每日趋势、最适合分析）
 
@@ -381,11 +383,10 @@ for m in body["metrics"]:
 
 ### Step 5：AI 智能分析并生成 HTML 单页报告（由 AI agent 完成，非脚本）
 
-脚本只产出 `douyin_data.json`（核心指标汇总 + 逐视频明细）+（可选）后台截图存档。**详细分析、图表、建议、HTML 文档全部由 AI agent 读取数据后生成**，不要依赖脚本里的固定模板——每次都应按当前数据重新研判。
+脚本只产出 `douyin_data.json`（核心指标汇总 + 逐视频明细）。**详细分析、图表、建议、HTML 文档全部由 AI agent 读取数据后生成**，不要依赖脚本里的固定结论——每次按当前数据重新研判。
 
 **AI 读取输入**：
-- `douyin_data.json`：`meta`（生成时间/周期/截图文件名）、`overview[]`（每项含 `key/label/current/last_period_incr`，`play` 项额外带 `daily[]` 逐日）、`videos[]`（每项 `title/create_date/metrics{view_count,like_count,comment_count,share_count,favorite_count,completion_rate_5s,completion_rate,bounce_rate_2s,avg_view_second,like_rate,comment_rate,share_rate,cover_click_rate,fan_view_proportion}`）。
-- （可选）后台截图 `dashboard_*.png` / `content_*.png` 与 `douyin_data.json` 同目录，仅作存档/兜底核对用；**最终的图文报告不嵌入截图**（用户明确：报告里不要出现后台截图，用图表和表格承载信息即可）。
+- `douyin_data.json`：`meta`（生成时间/周期）、`overview[]`（每项含 `key/label/current/last_period_incr`，`play` 项额外带 `daily[]` 逐日）、`videos[]`（每项 `title/create_date/metrics{view_count,like_count,comment_count,share_count,favorite_count,completion_rate_5s,completion_rate,bounce_rate_2s,avg_view_second,like_rate,comment_rate,share_rate,cover_click_rate,fan_view_proportion}`）。
 
 **AI 生成的 HTML 单页报告建议包含以下模块（文风统一中文，顺序可调整）：**
 
@@ -403,7 +404,10 @@ for m in body["metrics"]:
    - 结合 TOP 视频选题给出方向建议（哪类内容更受欢迎，建议系列化）。
    - 净增粉丝为正 → 强化主页人设/简介的「关注理由」，沉淀流量。
 
-**交付**：AI 用 `Write` 在输出目录生成 `report_<TS>.html`（带时间戳），再用 `present_files` 展示给用户。图表用 Chart.js 相对轻量；若环境离线，可退化为内联 SVG 或纯数据表。
+**交付与零验收规则（强制）**：
+- 用 `Write` 在输出目录生成 `report_<TS>.html`（带时间戳），生成成功后立即用 `present_files` 展示给用户。
+- **不要重新打开 HTML，不要启动浏览器，不要截图，不要调用读图工具，不要切换桌面/手机尺寸，不要做视觉验收或反复修改。**这是参考型数据报告，生成结果本身就是最终交付。
+- 图表优先使用内联 SVG 或原生 HTML/CSS，避免为了加载或验证外部依赖增加等待；使用 Chart.js 时也不做渲染检查。
 
 ### Step 6：收尾
 
@@ -420,7 +424,7 @@ agent-browser close --all
 2. 关掉窗口后再 `get`/`open` 会新建一个 `about:blank` 的无头浏览器，误以为「窗口没了」—— 用 `--auto-connect` 验证真身。
 3. 每次新开浏览器 CDP 端口会变，保活脚本里的端口要从 `get cdp-url` 动态取。
 4. 扫码登录是常态，别在登录页上硬取数据。
-5. **数据提取优先级 = 原始 JSON > DOM 解析 > 截图**：截图费 token 且不可分析，只用于肉眼确认。第一选择永远是 `network requests` 抓接口 `responseBody`；DOM 的 `eval` 是接口拿不到时的兜底。
+5. **数据提取优先级 = 原始 JSON > DOM 解析**：除登录二维码外不截图。第一选择是读取接口原始响应；DOM 的 `eval` 仅作接口拿不到时的兜底。
 6. 数据接口在 `creator.douyin.com/janus/douyin/creator/data/overview/*`（dashboard / dashboard/fans / item_contribution_top），响应体在 `data.responseBody` 字段（可能需 `json.loads`），各字段结构见文末「JSON 字段参考」一节。
 7. 比率类指标（封面点击率、完播率、跳出率）在 JSON 里是 **小数**（如 0.2174），展示时要 *100 转百分比；`trends` 里的 `value` 是全平台合计，`douyin_value` 才是抖音单平台值，分析时按需求选。
 
@@ -440,4 +444,4 @@ agent-browser close --all
 
 14. **判断是否登录必须用 DOM 读取，不要靠接口/URL/title 猜**：`get url` 与 `get title` 在登录页和后台都返回 `creator.douyin.com` + 「抖音创作者中心」，据此判断会误以为已登录（实测：首次跑就因此空等接口）。正确做法见 Step 2——用 `eval` 读 `document.body.innerText`，命中「扫码登录/验证码登录/密码登录」= 未登录，命中「数据概览/作品数据/粉丝」= 已登录。这也是用户明确要求的取数思路：**登录态判定走 DOM，不绕接口**。
 
-15. **生成的文件必须带时间戳后缀**：用户明确要求，每次 `screenshot` 落盘的文件都要在文件名后加 `_YYYYMMDD_HHMMSS`（用 `TS=$(date +%Y%m%d_%H%M%S)` 生成），避免覆盖、便于区分每次扫码、可追溯。示例：`douyin_qrcode_20260807_224321.png`。
+15. **二维码截图必须带时间戳后缀**：仅登录二维码允许截图，文件名使用 `douyin_qrcode_YYYYMMDD_HHMMSS.png`。后台页面和最终报告禁止截图或读图复核。
