@@ -67,6 +67,21 @@ bash scripts/restore_douyin_login.sh
 
 一键取数（恢复登录 + 抓取 + 汇总）：`bash scripts/analyze_douyin.sh`（输出到 `$WS` 或当前目录的 `douyin_analysis_<TS>/`，产物为 `douyin_data.json` + 两张截图）。**报告不是脚本生成的**——AI 拿到 `douyin_data.json` 后按 Step 5 生成 HTML。
 
+**自动存档（跨会话可用）**：每次取数后，脚本自动将 `douyin_data.json` + `items.json` 复制到 `$WS/douyin_archive/<TS>/` 并更新 `$WS/douyin_archive/index.json`。后续会话做分析时，AI 先读 `index.json` 即可发现所有历史快照，无需依赖上一次会话的 `douyin_analysis_*/` 目录。
+
+```
+$WS/douyin_archive/
+├── index.json                  # 快照索引（ts / datetime / dir / files）
+├── 20260808_101426/
+│   ├── douyin_data.json        # 汇总数据（overview + videos + metrics）
+│   └── items.json              # 原始接口响应（video_insight 等原始字段）
+├── 20260808_134342/
+│   └── ...
+└── ...
+```
+
+**AI 做跨会话对比时的工作流**：读取 `index.json` → 取最近两次快照的 `douyin_data.json` → 逐视频做 diff → 生成变化报告。不再需要用户在同一会话里持续分析。
+
 ### Step 1：打开无头浏览器 + 截图给用户扫码（仅兜底）
 
 **这是兜底路径，仅在 `restore_douyin_login.sh` 返回 `NEED_QR_SCAN` 时才用（首次使用或 cookie 已失效）。** 用 `--session-name douyin` 打开无头浏览器，截图给用户扫码。
@@ -172,7 +187,7 @@ agent-browser --session-name douyin network request <requestId> --json > /tmp/re
 - `data.responseBody` 才是真正的数据体；
 - 它可能是「JSON 字符串」（`dashboard`/`fans` 接口，需 `json.loads` 再解），也可能是「已解析对象」（`item_contribution_top` 接口）；解析脚本里先判断 `isinstance(body, str)` 再处理即可。
 
-**已知关键接口（实测，GET）：**
+**已知关键接口（账号 diamondfsd 实测，GET）：**
 
 > ⚠️ **API 路径会更新**：抖音创作者中心迭代频繁，接口路径和字段名可能变化。以下是目前（2026-08-07）实测可用的接口。若发现接口没出现在 network 请求中，刷新首页或检查是否有新的路径。
 
@@ -239,31 +254,31 @@ agent-browser --session-name douyin eval \
 - **字段清单（english_metric_name → 中文 → 示例值）：**
   | english_metric_name | 中文 | 示例值 | 备注 |
   |---|---|---|---|
-  | `play_cnt` | 播放量 | 50000 | |
-  | `digg_cnt` | 作品点赞 | 1000 | |
-  | `share_count` | 作品分享 | 100 | |
-  | `comment_cnt` | 作品评论 | 80 | |
-  | `net_fans_cnt` | 净增粉丝 | 200 | = 新增 - 取关 |
-  | `cancel_fans_cnt` | 取关粉丝 | 25 | |
+  | `play_cnt` | 播放量 | 56213 | |
+  | `digg_cnt` | 作品点赞 | 1050 | |
+  | `share_count` | 作品分享 | 118 | |
+  | `comment_cnt` | 作品评论 | 87 | |
+  | `net_fans_cnt` | 净增粉丝 | 217 | = 新增 - 取关 |
+  | `cancel_fans_cnt` | 取关粉丝 | 26 | |
   | `cover_click_ratio` | 封面点击率 | 0.2174 | 小数，*100 |
-  | `homepage_view_cnt` | 主页访问 | 1100 | |
+  | `homepage_view_cnt` | 主页访问 | 1159 | |
   | `publish_cnt` | 投稿量 | 6 | |
   | `completion_rate_5s` | 5秒完播率 | 0.3574 | 小数，*100 |
   | `bounce_rate_2s` | 2秒跳出率 | 0.4068 | 小数，*100 |
   | `avg_view_second` | 平均播放时长 | 9.7 | 单位秒 |
-  | `total_fans_cnt` | 总粉丝量 | 1500 | |
+  | `total_fans_cnt` | 总粉丝量 | 1540 | |
 
 #### 接口 2：dashboard/fans —— 粉丝数据
 - 顶层：`{ metrics:[...], status_code, status_msg }`
 - `metrics[]` 字段（结构与接口 1 相同，每项含 `trends`）：
   | english_metric_name | 中文 | 示例值 |
   |---|---|---|
-  | `net_fans_cnt` | 净增粉丝 | 200 |
-  | `cancel_fans_cnt` | 取关粉丝 | 25 |
-  | `home_view_fans_cnt` | 回访粉丝量 | 300 |
-  | `total_fans_cnt` | 总粉丝量 | 1500 |
-  | `new_fans_cnt` | 新增粉丝量 | 225 |
-  | `homepage_view_cnt` | 主页访问 | 1100 |
+  | `net_fans_cnt` | 净增粉丝 | 217 |
+  | `cancel_fans_cnt` | 取关粉丝 | 26 |
+  | `home_view_fans_cnt` | 回访粉丝量 | 308 |
+  | `total_fans_cnt` | 总粉丝量 | 1540 |
+  | `new_fans_cnt` | 新增粉丝量 | 243 |
+  | `homepage_view_cnt` | 主页访问 | 1159 |
 
 #### 接口 3：item_contribution_top —— 播放量 TOP3 作品
 - 顶层：`{ date_range, dimension, english_metric_name, metric_name, value_type, items:[...], status_code, status_msg }`
@@ -346,7 +361,7 @@ agent-browser --session-name douyin eval \
 
 #### 接口 5：income/category/summary —— 收入变现汇总（已移除抓取）
 - 路径 `creator.douyin.com/aweme/v1/creator/income/category/summary/`。
-- 实测：`category_list` 全空、`history_total_income=0`、各 summary 为 0 —— 未开通任何变现。**未开通变现时收入为 0 无分析价值，脚本已不再抓取 income。** 若日后需分析收入结构，按 `category_list`（直播打赏 / 星图商单 / 带货佣金等）做结构拆解即可，复用时自行在 `analyze_douyin.sh` 加回抓取。
+- 实测账号 diamondfsd：`category_list` 全空、`history_total_income=0`、各 summary 为 0 —— 未开通任何变现。**该账号场景下收入为 0 无分析价值，脚本已不再抓取 income。** 若日后需分析收入结构，按 `category_list`（直播打赏 / 星图商单 / 带货佣金等）做结构拆解即可，复用时自行在 `analyze_douyin.sh` 加回抓取。
 
 #### 数据中心子模块地图（operation 页左侧菜单 + 作品数据 tab）
 - 左侧菜单：`作品发布`、`收入变现`、`互动率/作品数/粉丝净增`(总览卡)…

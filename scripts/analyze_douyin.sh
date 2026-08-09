@@ -108,8 +108,8 @@ for k, zh in label.items():
         continue
     cur = ti(m.get("current_count"))
     incr = ti(m.get("last_period_incr"))
-    # 粉丝总量修复：overview/all 的 fans.current_count 有时返回异常值，
-    # 真实总粉丝应从 option_list 末日「累计值」取。
+    # 粉丝总量修复：overview/all 的 fans.current_count 对本账号返回异常值（如 10014），
+    # 真实总粉丝应从 option_list 末日「累计值」取（如 1352→1540，与用户真实粉丝量一致）。
     # 若 option_list 存在，一律改用其末日累计值 + 区间差值（正常账号两者一致，不会误伤）。
     if k == "fans" and m.get("option_list"):
         ol = m["option_list"]
@@ -171,3 +171,48 @@ print("（本脚本仅输出数据；详细分析/图表/HTML 报告由 AI agent
 PY
 
 echo "==> 完成。输出目录: $OUT"
+
+# ============================================================================
+# 存档：将 douyin_data.json + items.json 写入固定存档目录，方便跨会话分析
+# ============================================================================
+ARCHIVE_DIR="$WS/douyin_archive"
+mkdir -p "$ARCHIVE_DIR"
+
+ARCHIVE_SLOT="$ARCHIVE_DIR/$TS"
+mkdir -p "$ARCHIVE_SLOT"
+cp "$OUT/douyin_data.json" "$ARCHIVE_SLOT/douyin_data.json"
+cp "$OUT/items.json"        "$ARCHIVE_SLOT/items.json"
+echo "    已存档: $ARCHIVE_SLOT"
+
+# 更新索引文件
+INDEX="$ARCHIVE_DIR/index.json"
+if [ -f "$INDEX" ]; then
+  "$PYTHON_BIN" -c "
+import json,sys
+idx=json.load(open('$INDEX'))
+idx['slots'].append({
+  'ts':'$TS',
+  'datetime':'$(date '+%Y-%m-%d %H:%M')',
+  'dir':'$ARCHIVE_SLOT',
+  'douyin_data':'$ARCHIVE_SLOT/douyin_data.json',
+  'items':'$ARCHIVE_SLOT/items.json'
+})
+idx['slots']=sorted(idx['slots'], key=lambda x:x['ts'])
+json.dump(idx,open('$INDEX','w'),ensure_ascii=False,indent=2)
+" 2>/dev/null
+else
+  "$PYTHON_BIN" -c "
+import json
+json.dump({
+  'created_at':'$(date '+%Y-%m-%d %H:%M')',
+  'slots':[{
+    'ts':'$TS',
+    'datetime':'$(date '+%Y-%m-%d %H:%M')',
+    'dir':'$ARCHIVE_SLOT',
+    'douyin_data':'$ARCHIVE_SLOT/douyin_data.json',
+    'items':'$ARCHIVE_SLOT/items.json'
+  }]
+},open('$INDEX','w'),ensure_ascii=False,indent=2)
+"
+fi
+echo "    索引已更新: $INDEX ($(python3 -c "import json;print(len(json.load(open('$INDEX'))['slots']))") 个快照)"
