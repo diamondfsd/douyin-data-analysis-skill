@@ -1,6 +1,6 @@
 ---
 name: douyin-data-analysis
-description: 抖音数据分析与复盘工作流。通过 agent-browser 辅助登录抖音创作者中心，正常读取数据中心的各项运营数据（播放量/粉丝/互动/作品），进行自动化分析和报告生成。全程通过创作者中心官方页面完成，仅读取用户本人已授权可见的数据。
+description: 抖音数据分析与复盘工作流。通过 agent-browser 辅助登录抖音创作者中心，读取运营数据（播放量/粉丝/互动/作品）和指定作品的最近评论（默认 200 条），进行分析和报告生成。用户要求分析某作品评论、评论区反馈、评论主题，或提供 creator.douyin.com 的作品评论页链接时使用。全程通过创作者中心官方页面完成，仅读取用户本人已授权可见的数据。
 ---
 
 # 抖音数据分析与复盘（实战版）
@@ -9,7 +9,8 @@ description: 抖音数据分析与复盘工作流。通过 agent-browser 辅助�
 
 基于 `agent-browser` CLI 的抖音数据读取工作流，分两个阶段、职责严格分离：
 
-- **阶段一（脚本 `analyze_douyin.sh`）只做取数 + 汇总**：恢复登录 → 首页加载一次 → 抓 `overview/all` + `item/list` 原始接口 → 汇总成 `douyin_data.json`（含核心指标汇总 + 逐视频明细）。**脚本不截图、不做分析、不生成 HTML。**
+- **账号数据脚本 `analyze_douyin.sh`**：恢复登录 → 首页加载一次 → 抓 `overview/all` + `item/list` 原始接口 → 汇总成 `douyin_data.json`（含核心指标汇总 + 逐视频明细）。
+- **评论脚本 `fetch_douyin_comments.sh`**：打开用户提供的作品评论页，滚动触发分页加载，从浏览器网络记录读取评论列表响应，默认汇总最近 200 条到 `comments.json`。两个脚本都不截图、不做分析、不生成 HTML。
 - **阶段二（AI agent）只读取 `douyin_data.json`，生成完整 HTML 单页报告**：趋势解读、逐视频详细分析、数据驱动的建议和图表全部由 AI 完成（见 Step 5）。生成后直接交付，不做视觉验收。
 
 全程走创作者中心官方页面，只读取用户本人已授权可见的数据。**登录态复用靠 `scripts/restore_douyin_login.sh` 把已保存的登录 cookie 注入浏览器（见下「登录态恢复（关键）」），一次扫码后基本可长期免扫码。**
@@ -213,6 +214,22 @@ agent-browser --session-name douyin eval \
 
 `get text <ref>`、`snapshot`（纯文本树）也能取单字段，但只作辅助，不替代路 A 的结构化数据。
 
+### Step 4A：按作品评论页读取最近评论（用户提供链接时使用）
+
+当用户要求分析某条作品的评论、评论情绪、评论主题或高频诉求，并提供类似下面的创作者中心作品评论页链接时，运行专用脚本：
+
+```bash
+WS=<输出目录> bash scripts/fetch_douyin_comments.sh \
+  'https://creator.douyin.com/creator-micro/interactive/comment?item_id=<作品ID>&enter_from=content_manage_v2'
+```
+
+- 第二个可选参数为条数上限，默认 `200`，允许 `1` 到 `1000`。
+- 脚本只接受 `creator.douyin.com/creator-micro/interactive/comment` 且带数字 `item_id` 的链接；不要把普通作品分享链接、外站链接或猜测出的接口地址传入。
+- 评论页面采用滚动加载。脚本会滚动实际滚动容器，直到评论相关请求连续三轮不再增加或达到滚动上限，再读取浏览器已完成请求的响应体；不要手动拼接、重放或猜测评论接口。
+- 产物：`douyin_comments_<时间戳>/comment_requests.json`（请求记录）、`raw/`（原始响应）、`comments.json`（去重后的结构化评论）。`comments.json.meta.returned_count` 是实际取到的条数，可能少于上限，例如作品本身评论不足或页面提前停止加载。
+- 评论子应用可能要求独立登录。脚本输出 `NEED_QR_SCAN` 时，走本技能的扫码登录流程；登录完成后重新执行同一条评论脚本命令。
+- 分析时优先读 `comments.json`，按 `text` 归类需求、异议、问题和建议；不要输出评论者的个人资料或尝试批量互动。
+
 ---
 
 ### JSON 字段参考（分析必看）
@@ -360,6 +377,12 @@ agent-browser --session-name douyin eval \
   | `homepage_visit_count` | 主页访问量 | 字符串 |
   | `fan_view_proportion` | 粉丝观看占比 | 字符串小数 |
   > ⚠ `items[].metrics` 里的值**全部是字符串**（即使数字），解析时先 `float()` 再运算/乘 100。
+
+#### 评论输出：comments.json
+
+- `meta.item_id`：作品 ID；`meta.returned_count`：实际解析并去重后的评论数；`meta.limit`：请求上限。
+- `comments[]`：`comment_id`、`text`、`create_time`、`like_count`、`reply_count`、`user.id`、`user.nickname`。不同页面版本的字段可能缺失，保留 `null`，不要据此推断零值。
+- 默认只收集一级评论。回复数量字段可用于判断讨论深度，但不自动展开所有楼中楼回复。
 
 #### 接口 5：income/category/summary —— 收入变现汇总（已移除抓取）
 - 路径 `creator.douyin.com/aweme/v1/creator/income/category/summary/`。

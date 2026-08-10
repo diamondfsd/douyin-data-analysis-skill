@@ -6,6 +6,7 @@
 
 - 自动恢复登录态（免扫码优先，cookie 注入恢复）
 - 单次加载首页并抓取创作者中心官方接口原始数据（播放/点赞/评论/分享/粉丝等核心指标 + 逐视频明细）
+- 输入创作者中心作品评论页链接，自动滚动加载并读取最近 200 条评论（可自定义上限），保留原始响应和结构化评论结果
 - AI 读取数据后生成完整的 HTML 单页分析报告（含 Chart.js 图表、TOP5 排名、逐视频分析、数据驱动的优化建议）
 - HTML 生成后直接交付，不做截图、读图或多尺寸视觉验收
 
@@ -17,6 +18,7 @@ douyin-data-analysis-skill/
 ├── README.md             # 本文件
 ├── scripts/
 │   ├── analyze_douyin.sh        # 一键取数脚本（恢复登录 → 抓接口 → 汇总 JSON）
+│   ├── fetch_douyin_comments.sh # 指定作品评论页取数（滚动加载 → 原始响应 → 评论 JSON）
 │   └── restore_douyin_login.sh  # 登录态恢复脚本（cookie 注入，免扫码）
 ├── assets/               # 静态资源（预留）
 └── references/           # 参考文档（预留）
@@ -62,6 +64,28 @@ WS=./output bash scripts/analyze_douyin.sh
 # 3. 读取 output/douyin_analysis_*/douyin_data.json 进行分析
 ```
 
+### 读取指定作品的评论
+
+复制创作者中心的作品评论页链接后直接执行。脚本默认取最近 200 条一级评论，第二个参数可设为 1 到 1000。
+
+```bash
+WS=./output bash scripts/fetch_douyin_comments.sh \
+  'https://creator.douyin.com/creator-micro/interactive/comment?item_id=7672002224478918574&enter_from=content_manage_v2'
+
+# 例如最多取 500 条
+WS=./output bash scripts/fetch_douyin_comments.sh '<作品评论页链接>' 500
+```
+
+结果写入 `output/douyin_comments_*/`：
+
+| 文件 | 说明 |
+|------|------|
+| `comment_requests.json` | 页面加载过程中捕获的评论相关请求记录 |
+| `raw/` | 浏览器已完成请求的原始响应 |
+| `comments.json` | 去重后的结构化一级评论，供分析使用 |
+
+脚本仅接受 `creator.douyin.com` 的作品评论页链接。页面以滚动方式加载，脚本会等待请求不再增加后停止；当作品评论不足或页面未加载完整时，`comments.json` 的 `meta.returned_count` 会小于请求上限。
+
 取数完成后，`douyin_data.json` 包含结构化的核心指标和逐视频明细，你可以：
 - 交给任意 LLM（ChatGPT / Claude / DeepSeek 等）生成分析报告
 - 用 Python / Excel 自行做数据可视化
@@ -78,6 +102,7 @@ WS=./output bash scripts/analyze_douyin.sh
 | `overview.json` | overview/all 接口原始响应 |
 | `items.json` | item/list 接口原始响应 |
 | `douyin_data.json` | 汇总后的结构化数据（AI 分析的主输入） |
+| `comments.json` | 指定作品的结构化一级评论（默认最多 200 条） |
 
 ## 技术要点
 
@@ -86,6 +111,7 @@ WS=./output bash scripts/analyze_douyin.sh
 - **数据提取优先级**：原始 JSON > DOM 解析；除登录二维码外不截图
 - **直接交付**：生成 HTML 后直接返回文件，不重新打开、不截图、不读图、不做重复验收
 - **关键接口**：`overview/all`（首页数据总览）、`item/list`（作品列表）
+- **评论读取**：滚动作品评论页面，读取浏览器已完成的评论列表响应；不拼接、猜测或重放接口请求
 - **比率类指标**：JSON 中为小数（如 0.2174），展示时需 ×100 转百分比
 
 ## License
