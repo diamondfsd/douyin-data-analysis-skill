@@ -4,7 +4,7 @@
 
 ## 功能
 
-- 自动恢复登录态（免扫码优先，cookie 注入恢复）
+- 自动恢复登录态（`--profile` 持久化浏览器目录，cookie 自动保存，免扫码优先）
 - 单次加载首页并抓取创作者中心官方接口原始数据（播放/点赞/评论/分享/粉丝等核心指标 + 逐视频明细）
 - 输入创作者中心作品评论页链接，自动滚动加载并读取最近 200 条评论（可自定义上限），保留原始响应和结构化评论结果
 - AI 读取数据后生成完整的 HTML 单页分析报告（含 Chart.js 图表、TOP5 排名、逐视频分析、数据驱动的优化建议）
@@ -19,7 +19,7 @@ douyin-data-analysis-skill/
 ├── scripts/
 │   ├── analyze_douyin.sh        # 一键取数脚本（恢复登录 → 抓接口 → 汇总 JSON）
 │   ├── fetch_douyin_comments.sh # 指定作品评论页取数（滚动加载 → 原始响应 → 评论 JSON）
-│   └── restore_douyin_login.sh  # 登录态恢复脚本（cookie 注入，免扫码）
+│   └── restore_douyin_login.sh  # 登录态恢复脚本（--profile 持久化，免扫码优先）
 ├── assets/               # 静态资源（预留）
 └── references/           # 参考文档（预留）
 ```
@@ -106,7 +106,8 @@ WS=./output bash scripts/fetch_douyin_comments.sh '<作品评论页链接>' 500
 
 ## 技术要点
 
-- **登录态恢复**：`--session-name` 的自动恢复不生效，需手动注入 cookie（`restore_douyin_login.sh`）
+- **登录态持久化**：使用 `--profile` 持久化浏览器目录（`~/.agent-browser/profiles/douyin`），cookie/localStorage 自动实时写入磁盘，跟正常 Chrome 一样。一次扫码后只要 cookie 没过期就不用再扫
+- **代理豁免**：所有脚本开头 `export HTTP_PROXY=""`，避免 agent-browser 的 Chromium 报 `ERR_NO_SUPPORTED_PROXIES`
 - **快速取数**：首页只加载一次，两个核心接口出现后立即抓取，不使用重复导航和固定 5 秒等待
 - **数据提取优先级**：原始 JSON > DOM 解析；除登录二维码外不截图
 - **直接交付**：生成 HTML 后直接返回文件，不重新打开、不截图、不读图、不做重复验收

@@ -17,6 +17,12 @@
 
 set -uo pipefail
 
+# 抖音是国内站点，绕过代理（agent-browser 的 Chromium 不支持 HTTP 代理）
+export HTTP_PROXY="" HTTPS_PROXY="" http_proxy="" https_proxy="" ALL_PROXY=""
+
+# 持久化浏览器配置目录（cookie/localStorage 自动持久化，跟正常浏览器一样）
+export AGENT_BROWSER_PROFILE="$HOME/.agent-browser/profiles/douyin"
+
 SESSION="douyin"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WS="${WS:-$(pwd)}"

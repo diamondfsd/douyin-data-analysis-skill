@@ -1,5 +1,14 @@
 # Analysis output (not part of the skill)
 douyin_analysis_*/
+douyin_archive/
+douyin_comments_*/
+output/
+
+# QR code screenshots (contain login session info)
+douyin_qrcode_*.png
+
+# WorkBuddy internal data
+.workbuddy/
 
 # macOS
 .DS_Store

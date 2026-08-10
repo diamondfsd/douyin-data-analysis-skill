@@ -13,12 +13,13 @@ description: 抖音数据分析与复盘工作流。通过 agent-browser 辅助�
 - **评论脚本 `fetch_douyin_comments.sh`**：打开用户提供的作品评论页，滚动触发分页加载，从浏览器网络记录读取评论列表响应，默认汇总最近 200 条到 `comments.json`。两个脚本都不截图、不做分析、不生成 HTML。
 - **阶段二（AI agent）只读取 `douyin_data.json`，生成完整 HTML 单页报告**：趋势解读、逐视频详细分析、数据驱动的建议和图表全部由 AI 完成（见 Step 5）。生成后直接交付，不做视觉验收。
 
-全程走创作者中心官方页面，只读取用户本人已授权可见的数据。**登录态复用靠 `scripts/restore_douyin_login.sh` 把已保存的登录 cookie 注入浏览器（见下「登录态恢复（关键）」），一次扫码后基本可长期免扫码。**
+全程走创作者中心官方页面，只读取用户本人已授权可见的数据。**登录态复用靠 `--profile` 持久化浏览器目录（`~/.agent-browser/profiles/douyin`），cookie/localStorage 自动保存在磁盘上，跟正常浏览器一样。一次扫码后只要 cookie 没过期就不用再扫。**
 
 核心教训来自实战：
 
-- **登录态恢复用 `scripts/restore_douyin_login.sh`，别迷信 `--session-name` 的"自动恢复"**：`--session-name <name>` 在 `close` 时**确实**会把 cookies 存到 `~/.agent-browser/sessions/<name>-default.json`，但重新 `open` 时**不会把登录 cookie 注入浏览器**（实测：文件里有未过期的 `sid_tt`/`sessionid`，浏览器却仍是匿名态）。外部流传的 `agent-browser --session <id> --restore` 写法在当前版本**不存在**（`--restore` 不是有效 flag；`--session` 是隔离会话、不自动保存）。正确做法：跑 `bash scripts/restore_douyin_login.sh`——已登录就直接用；未登录就从 session 文件把 cookie 逐个 `cookies set` 注入、reload 即恢复，免去重复扫码。
-- **无头 + 截图给用户扫码**：不需要开有头窗口。无头模式打开 → 截图 → **用 `present_files` 把二维码图真正展示给用户**（仅 `Read` 自己看没用，用户看不到）。用户扫完告诉我，我拿到数据后关掉即可，下次 `--session-name` 自动恢复。
+- **登录态持久化用 `--profile`，别用 `--session-name`**：`--session-name <name>` 是"临时上下文 + 手动存取 cookie"方案，有两个致命 bug：① `close` 时 Chromium 上下文已销毁，cookie 导出到 session 文件变成空壳（实测：13KB → 36 字节 `{"cookies":[],"origins":[]}`）；② `open` 时不会把 session 文件里的 cookie 注入回浏览器。等于存了白存。**正确做法**：用 `--profile <path>` 指定持久化浏览器目录（`~/.agent-browser/profiles/douyin`），cookie/localStorage 自动实时写入磁盘，跟正常 Chrome 一样。所有脚本通过环境变量 `AGENT_BROWSER_PROFILE` 统一设置。
+- **代理冲突必须绕过**：用户环境可能有 `HTTP_PROXY=http://127.0.0.1:7890/`，agent-browser 的 Chromium 不支持 HTTP 代理，直接 `ERR_NO_SUPPORTED_PROXIES` 打不开页面。所有脚本开头必须 `export HTTP_PROXY="" HTTPS_PROXY="" http_proxy="" https_proxy="" ALL_PROXY=""`。抖音是国内站点，绕过代理不影响访问。
+- **无头 + 截图给用户扫码**：不需要开有头窗口。无头模式打开 → 截图 → **用 `present_files` 把二维码图真正展示给用户**（仅 `Read` 自己看没用，用户看不到）。用户扫完告诉我，我拿到数据后关掉即可，下次 `--profile` 自动恢复登录态。
 - **后续操作复用 daemon**：同一次任务内不要 `close`，多个页面间直接用 `open` 导航（会复用已有浏览器）。**任务结束才 `close`**。
 - **数据提取优先级：原始 JSON > 解析 DOM**。除登录二维码外不截图。首页同时触发两个核心接口，只加载一次并复用已签名的同源请求，详见 Step 4。
 - **先执行、报错再处理（用户明确要求）**：不要每次都先用 `which` / `ls` 预先检测 `agent-browser` 是否安装、路径在哪。直接跑命令，只有命令真的报错（如 `command not found`、登录态失效）时才去排查或安装。这样能省掉一个永远多余的预检步骤。
@@ -35,7 +36,7 @@ description: 抖音数据分析与复盘工作流。通过 agent-browser 辅助�
 > 🚨 **红线速记（每次开口前先过一遍）**：① 对用户说的每一句都必须是**简体中文**；② 你做的每一步（恢复登录、免扫码、抓数据、生成报告…）都是**内部动作，一个字都别告诉用户**；③ 用户唯一可能看到的「过程提示」只有一种——需要他扫码时，输出**且仅输出**一句「请用抖音 App 扫码登录，扫完告诉我」并 `present_files` 二维码；④ 除此之外，用户只看得到**最终分析报告**。多说一句废话（包括"报告已生成""登录已恢复"）都算违规。
 
 - **❗ 面向用户的文字一律用中文（强制）**：用户是中文环境，所有给用户的解释、步骤、提醒、结论**必须全部用简体中文**。技能内部步骤 / 注释 / 字段名 / 代码可中英混排，但**对用户说的任何一句话都不能是英文**（踩坑 #13）。输出前自检：这条消息里有没有英文单词？有就改回中文。
-- **❗ 严禁向用户输出任何"过程性状态"（最高红线）**：你执行的每个动作——恢复登录、注入 cookie、免扫码、抓接口、`analyze_douyin.sh` 取数、汇总成 `douyin_data.json`、脚本执行结果、生成报告、关闭浏览器——统统是**内部实现细节，用户一个字都不该看到**。绝对禁止对用户说「正在恢复登录」「无需扫码 / 不用扫描」「已抓取到 N 条数据」「登录态已保存，下次免扫码」「正在生成报告」等任何过程描述。这些只写在技能内部供你参考。
+- **❗ 严禁向用户输出任何"过程性状态"（最高红线）**：你执行的每个动作——恢复登录、持久化 profile、免扫码、抓接口、`analyze_douyin.sh` 取数、汇总成 `douyin_data.json`、脚本执行结果、生成报告、关闭浏览器——统统是**内部实现细节，用户一个字都不该看到**。绝对禁止对用户说「正在恢复登录」「无需扫码 / 不用扫描」「已抓取到 N 条数据」「登录态已保存，下次免扫码」「正在生成报告」等任何过程描述。这些只写在技能内部供你参考。
   - ✅ 用户唯一可能看到的「过程提示」只有一种情况：必须他本人扫码登录时，输出**且仅输出**一句中文——「请用抖音 App 扫码登录，扫完告诉我」——然后调用 `present_files` 把二维码给他。
   - ✅ 除此之外，用户应该**只看到最终的分析报告**（HTML 预览 + 结论文字）。
   - 🚫 连「分析报告已生成」「数据已分析完成」这种废话都不要说——把报告用 `present_files` 展示出来本身就是结果，不必再用文字复述一遍。
@@ -45,14 +46,14 @@ description: 抖音数据分析与复盘工作流。通过 agent-browser 辅助�
 ## Prerequisites
 
 - **不要预先检测工具是否可用**：直接执行 `agent-browser` 命令即可。若报 `command not found` 或类似「找不到命令」的错，再执行 `npm install -g agent-browser` 安装。避免「先用 `which` 检测、再执行」这类浪费步骤（见上方「先执行、报错再处理」原则）。
-- 会话参数：统一用 `--session-name douyin`（所有命令都带，连接同一浏览器 daemon）。它的"自动保存"在 `close` 时有效（cookie 落盘到 `~/.agent-browser/sessions/douyin-default.json`），但"自动恢复"**不生效**——重开不注入 cookie。登录态恢复必须走 `scripts/restore_douyin_login.sh`（手动注入 cookie）。⚠️ 当前版本**没有 `--restore` 这个 flag**，也别用 `--session`（隔离会话）。
-- 备选持久化：`--profile <path>`（完整 Chrome profile 目录，更重量级）；`--auto-connect`（连到用户已有的 Chrome 实例）
+- 会话参数：统一用 `--session-name douyin`（所有命令都带，连接同一浏览器 daemon）+ 环境变量 `AGENT_BROWSER_PROFILE="$HOME/.agent-browser/profiles/douyin"`（持久化浏览器目录，cookie/localStorage 自动保存在磁盘上，跟正常浏览器一样）。⚠️ **不要用 `--session-name` 的 cookie 存取机制**——它 `close` 时存不住、`open` 时读不回（详见踩坑 #16）。`--profile` 才是持久化正解。
+- 代理豁免：所有脚本开头必须 `export HTTP_PROXY="" HTTPS_PROXY="" http_proxy="" https_proxy="" ALL_PROXY=""`，否则 agent-browser 的 Chromium 报 `ERR_NO_SUPPORTED_PROXIES` 打不开页面（详见踩坑 #17）。
 
 ## Workflow
 
 ### Step 0：尝试无扫码恢复登录（每次分析必跑，优先于扫码）
 
-**核心修正（实测）**：别再依赖 `--session-name` 的"自动恢复"——它不会注入 cookie，每次都变匿名态、被迫重新扫码。改用脚本：
+**核心方案**：使用 `--profile` 持久化浏览器目录（`~/.agent-browser/profiles/douyin`），cookie/localStorage 自动实时保存在磁盘上，跟正常 Chrome 一样。脚本 `restore_douyin_login.sh` 会用这个 profile 打开首页并检查 DOM 判断登录态：
 
 ```bash
 bash scripts/restore_douyin_login.sh
@@ -60,10 +61,9 @@ bash scripts/restore_douyin_login.sh
 
 脚本行为（幂等、可重复）：
 - 已登录 → 输出 `ALREADY_LOGGED_IN` 并退出 0，直接进入 Step 3 取数；
-- 未登录但 session 文件存在 → 从 `~/.agent-browser/sessions/douyin-default.json` 注入全部 cookie → reload → 恢复登录（输出 `RESTORED_LOGIN`）；
-- 无 session 文件 / 注入后仍失败 → 输出 `NEED_QR_SCAN`，才走 Step 1 截图扫码。
+- 未登录（cookie 过期或首次使用）→ 输出 `NEED_QR_SCAN`（退出码 2），走 Step 1 截图扫码。
 
-> **关键红线**：恢复登录时**千万不要 `close` 当前浏览器再重开**——当前若是匿名态，`close` 会把匿名状态覆盖进 session 文件、毁掉里面完好的登录 cookie。直接对"当前浏览器"注入 cookie 即可。
+> **为什么用 `--profile` 而不是 `--session-name`**：`--session-name` 的 cookie 存取有两个致命 bug——`close` 时 Chromium 上下文已销毁，cookie 导出到 JSON 文件变成空壳；`open` 时又不会把 JSON 里的 cookie 注入回浏览器。`--profile` 直接用 Chrome 的持久化用户目录，cookie 实时写入磁盘 SQLite，开关浏览器都不会丢（详见踩坑 #16）。
 
 一键取数（恢复登录 + 单次加载首页 + 抓取 + 汇总）：`bash scripts/analyze_douyin.sh`（输出到 `$WS` 或当前目录的 `douyin_analysis_<TS>/`，产物为 `overview.json`、`items.json`、`douyin_data.json`）。**报告不是脚本生成的**——AI 拿到 `douyin_data.json` 后按 Step 5 生成 HTML。
 
@@ -84,18 +84,22 @@ $WS/douyin_archive/
 
 ### Step 1：打开无头浏览器 + 截图给用户扫码（仅兜底）
 
-**这是兜底路径，仅在 `restore_douyin_login.sh` 返回 `NEED_QR_SCAN` 时才用（首次使用或 cookie 已失效）。** 用 `--session-name douyin` 打开无头浏览器，截图给用户扫码。
+**这是兜底路径，仅在 `restore_douyin_login.sh` 返回 `NEED_QR_SCAN` 时才用（首次使用或 cookie 已失效）。** 用 `--profile` 持久化目录 + `--session-name douyin` 打开无头浏览器，截图给用户扫码。
 
 ```bash
-# 打开（无头，用 session 名持久化）
+# 设置环境变量（所有命令都需要）
+export HTTP_PROXY="" HTTPS_PROXY="" http_proxy="" https_proxy="" ALL_PROXY=""
+export AGENT_BROWSER_PROFILE="$HOME/.agent-browser/profiles/douyin"
+
+# 打开（无头，用 profile 持久化）
 agent-browser --session-name douyin open "https://creator.douyin.com/creator-micro/home"
 
 # 短暂等待二维码渲染，不等待 networkidle
-agent-browser wait 1000
+agent-browser --session-name douyin wait 1000
 
 # 截图给用户扫码（放到工作目录）
 TS=$(date +%Y%m%d_%H%M%S)
-agent-browser screenshot <workspace>/douyin_qrcode_${TS}.png
+agent-browser --session-name douyin screenshot <workspace>/douyin_qrcode_${TS}.png
 ```
 
 截图保存后，**必须立即调用 `present_files` 把该 PNG 展示给用户**（这是用户能看到二维码的唯一方式；只 `Read` 自己看或文字描述都无效）。展示后用中文提醒一句即可：「请用抖音 App 扫码登录，扫完告诉我」——**仅此一句，不要加任何补充说明**。
@@ -190,7 +194,7 @@ agent-browser --session-name douyin network request <requestId> --json > /tmp/re
 - `data.responseBody` 才是真正的数据体；
 - 它可能是「JSON 字符串」（`dashboard`/`fans` 接口，需 `json.loads` 再解），也可能是「已解析对象」（`item_contribution_top` 接口）；解析脚本里先判断 `isinstance(body, str)` 再处理即可。
 
-**已知关键接口（账号 diamondfsd 实测，GET）：**
+**已知关键接口（实测，GET）：**
 
 > ⚠️ **API 路径会更新**：抖音创作者中心迭代频繁，接口路径和字段名可能变化。以下是目前（2026-08-07）实测可用的接口。若发现接口没出现在 network 请求中，刷新首页或检查是否有新的路径。
 
@@ -386,7 +390,7 @@ WS=<输出目录> bash scripts/fetch_douyin_comments.sh \
 
 #### 接口 5：income/category/summary —— 收入变现汇总（已移除抓取）
 - 路径 `creator.douyin.com/aweme/v1/creator/income/category/summary/`。
-- 实测账号 diamondfsd：`category_list` 全空、`history_total_income=0`、各 summary 为 0 —— 未开通任何变现。**该账号场景下收入为 0 无分析价值，脚本已不再抓取 income。** 若日后需分析收入结构，按 `category_list`（直播打赏 / 星图商单 / 带货佣金等）做结构拆解即可，复用时自行在 `analyze_douyin.sh` 加回抓取。
+- 实测账号：`category_list` 全空、`history_total_income=0`、各 summary 为 0 —— 未开通任何变现。**该账号场景下收入为 0 无分析价值，脚本已不再抓取 income。** 若日后需分析收入结构，按 `category_list`（直播打赏 / 星图商单 / 带货佣金等）做结构拆解即可，复用时自行在 `analyze_douyin.sh` 加回抓取。
 
 #### 数据中心子模块地图（operation 页左侧菜单 + 作品数据 tab）
 - 左侧菜单：`作品发布`、`收入变现`、`互动率/作品数/粉丝净增`(总览卡)…
@@ -436,10 +440,13 @@ for m in body["metrics"]:
 
 ```bash
 # 任务结束才 close，不要在中间步骤关
-agent-browser close --all
+# --profile 持久化目录下，close 不会丢失 cookie（跟正常浏览器一样）
+export HTTP_PROXY="" HTTPS_PROXY="" http_proxy="" https_proxy="" ALL_PROXY=""
+export AGENT_BROWSER_PROFILE="$HOME/.agent-browser/profiles/douyin"
+agent-browser --session-name douyin close --all
 ```
 
-（内部笔记，不要告诉用户）下次分析先跑 `bash scripts/restore_douyin_login.sh` 恢复登录态（注入 cookie 即免扫码）；任务结束再 `close --all`，cookie 落盘供下次复用。
+（内部笔记，不要告诉用户）`--profile` 目录下 cookie 已实时写入磁盘，`close` 不会丢失登录态。下次分析直接跑 `bash scripts/analyze_douyin.sh`，脚本用同一个 profile 打开浏览器，通常直接就是登录态、无需扫码。
 
 ## 踩坑记录
 
@@ -453,9 +460,9 @@ agent-browser close --all
 
 ## 重要坑位补充（会话实测）
 
-8. ~~登录态不跨重启持久化~~ → **部分成立但有坑**：`--session-name douyin` 在 `close` 时**会保存** cookie 到 `~/.agent-browser/sessions/douyin-default.json`（文件含未过期的 `sid_tt`/`sessionid`/`uid_tt` 即证明），但重新 `open` 时**不会把 cookie 注入浏览器**，所以每次都是匿名态、被迫重新扫码。外部说的 `--session <id> --restore` 在当前 agent-browser 版本**不存在**（`--restore` 不是有效 flag；`--session` 是隔离会话）。**正确解法**：`bash scripts/restore_douyin_login.sh` 把文件里的 cookie 手动 `cookies set` 注入当前浏览器、reload 即恢复登录，免扫码。取数命令仍统一带 `--session-name douyin`。
+8. ~~登录态不跨重启持久化~~ → **已彻底解决**：`--session-name` 的 cookie 存取有两个致命 bug（详见踩坑 #16），现已弃用。改用 `--profile` 持久化浏览器目录（`AGENT_BROWSER_PROFILE="$HOME/.agent-browser/profiles/douyin"`），cookie/localStorage 自动实时写入磁盘，开关浏览器都不丢。脚本 `restore_douyin_login.sh` 已改用此方案。
 
-9. ~~底层常驻 daemon 会让 `--headed` 失效~~ → **不再需要有头模式**：直接用无头 + `--session-name` + 截图给用户扫码。用户扫完后 `close`，下次 `open --session-name douyin` 自动登录。daemon 冲突也不再是问题。
+9. ~~底层常驻 daemon 会让 `--headed` 失效~~ → **不再需要有头模式**：直接用无头 + `--profile` + 截图给用户扫码。用户扫完后 `close`，下次 `open` 用同一个 `--profile` 自动恢复登录态。daemon 冲突也不再是问题。
 
 10. ~~work_list 分页~~ → **API 已变化**：旧版 `work_list` 已下线，新版 `item/list` 同样分页（has_more, max_cursor）。日常分析用首页 10 条足够。
 
@@ -468,3 +475,9 @@ agent-browser close --all
 14. **判断是否登录必须用 DOM 读取，不要靠接口/URL/title 猜**：`get url` 与 `get title` 在登录页和后台都返回 `creator.douyin.com` + 「抖音创作者中心」，据此判断会误以为已登录（实测：首次跑就因此空等接口）。正确做法见 Step 2——用 `eval` 读 `document.body.innerText`，命中「扫码登录/验证码登录/密码登录」= 未登录，命中「数据概览/作品数据/粉丝」= 已登录。这也是用户明确要求的取数思路：**登录态判定走 DOM，不绕接口**。
 
 15. **二维码截图必须带时间戳后缀**：仅登录二维码允许截图，文件名使用 `douyin_qrcode_YYYYMMDD_HHMMSS.png`。后台页面和最终报告禁止截图或读图复核。
+
+16. **`--session-name` 的 cookie 存取有致命 bug，已弃用**：实测发现两个问题叠加导致反复扫码：① **close 时 cookie 存不住**——`--session-name douyin` 在 `close` 时会把 cookie 导出到 `~/.agent-browser/sessions/douyin-default.json`，但 close 瞬间 Chromium 上下文已销毁，导出的是空壳（实测：13KB session 文件 → close 后变成 36 字节 `{"cookies":[],"origins":[]}`）。② **open 时 cookie 读不回**——即使 session 文件里有完整的 `sid_tt`/`sessionid`，`open --session-name douyin` 也不会把 cookie 注入新浏览器，每次都是匿名态。**解决方案**：改用 `--profile` 持久化浏览器目录（`AGENT_BROWSER_PROFILE="$HOME/.agent-browser/profiles/douyin"`），cookie 实时写入磁盘 SQLite，跟正常 Chrome 一样。
+
+17. **代理冲突导致浏览器打不开**：用户环境可能有 `HTTP_PROXY=http://127.0.0.1:7890/`（Clash 等代理工具），agent-browser 的 Chromium 不支持 HTTP 代理，直接 `ERR_NO_SUPPORTED_PROXIES` 报错、页面打不开。脚本会误以为登录态失效、反复要求扫码。**解决方案**：所有脚本开头必须 `export HTTP_PROXY="" HTTPS_PROXY="" http_proxy="" https_proxy="" ALL_PROXY=""`。抖音是国内站点，绕过代理不影响访问。AI agent 手动执行 agent-browser 命令时也要带上这些环境变量。
+
+18. **`--profile` 是持久化正解，`--session-name` 不是**：`agent-browser --help` 显示 `--profile <name|path>` 参数——指定一个 Chrome profile 目录，就是真正的持久化浏览器配置（cookie、localStorage、缓存全部自动保存在磁盘上）。`--session-name` 只是"临时上下文 + 手动存取 cookie"的方案，存取机制有 bug（见 #16）。所有脚本已统一改用 `AGENT_BROWSER_PROFILE` 环境变量 + `--session-name douyin`（后者仅用于连接同一 daemon，不再依赖其 cookie 存取）。
