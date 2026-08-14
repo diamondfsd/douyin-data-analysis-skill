@@ -20,6 +20,7 @@ description: 抖音数据分析与复盘工作流。通过 agent-browser 辅助�
 - **登录态持久化用 `--profile`，别用 `--session-name`**：`--session-name <name>` 是"临时上下文 + 手动存取 cookie"方案，有两个致命 bug：① `close` 时 Chromium 上下文已销毁，cookie 导出到 session 文件变成空壳（实测：13KB → 36 字节 `{"cookies":[],"origins":[]}`）；② `open` 时不会把 session 文件里的 cookie 注入回浏览器。等于存了白存。**正确做法**：用 `--profile <path>` 指定持久化浏览器目录（`~/.agent-browser/profiles/douyin`），cookie/localStorage 自动实时写入磁盘，跟正常 Chrome 一样。所有脚本通过环境变量 `AGENT_BROWSER_PROFILE` 统一设置。
 - **代理冲突必须绕过**：用户环境可能有 `HTTP_PROXY=http://127.0.0.1:7890/`，agent-browser 的 Chromium 不支持 HTTP 代理，直接 `ERR_NO_SUPPORTED_PROXIES` 打不开页面。所有脚本开头必须 `export HTTP_PROXY="" HTTPS_PROXY="" http_proxy="" https_proxy="" ALL_PROXY=""`。抖音是国内站点，绕过代理不影响访问。
 - **无头 + 截图给用户扫码**：不需要开有头窗口。无头模式打开 → 截图 → **用 `present_files` 把二维码图真正展示给用户**（仅 `Read` 自己看没用，用户看不到）。用户扫完告诉我，我拿到数据后关掉即可，下次 `--profile` 自动恢复登录态。
+- **扫码后可能要求「用户验证」（短信验证码），非必现但必须兼容**：2026-08-14 实测——用户扫码并在手机确认后，页面仍可能弹出短信验证码输入（或安全验证/滑块）。无头模式用户无法操作，**检测到验证特征就切有头浏览器**：`bash scripts/headed_login_douyin.sh`，让用户直接看窗口完成验证（详见 Step 2A）。切有头不丢登录进度（`--profile` 持久化，扫码 token 在服务端）。
 - **后续操作复用 daemon**：同一次任务内不要 `close`，多个页面间直接用 `open` 导航（会复用已有浏览器）。**任务结束才 `close`**。
 - **数据提取优先级：原始 JSON > 解析 DOM**。除登录二维码外不截图。首页同时触发两个核心接口，只加载一次并复用已签名的同源请求，详见 Step 4。
 - **先执行、报错再处理（用户明确要求）**：不要每次都先用 `which` / `ls` 预先检测 `agent-browser` 是否安装、路径在哪。直接跑命令，只有命令真的报错（如 `command not found`、登录态失效）时才去排查或安装。这样能省掉一个永远多余的预检步骤。
@@ -61,6 +62,7 @@ bash scripts/restore_douyin_login.sh
 
 脚本行为（幂等、可重复）：
 - 已登录 → 输出 `ALREADY_LOGGED_IN` 并退出 0，直接进入 Step 3 取数；
+- 未登录但处于「用户验证」步骤（短信验证码/安全验证）→ 输出 `NEED_USER_VERIFY`（退出码 3），走 Step 2A 切有头浏览器让用户完成验证；
 - 未登录（cookie 过期或首次使用）→ 输出 `NEED_QR_SCAN`（退出码 2），走 Step 1 截图扫码。
 
 > **为什么用 `--profile` 而不是 `--session-name`**：`--session-name` 的 cookie 存取有两个致命 bug——`close` 时 Chromium 上下文已销毁，cookie 导出到 JSON 文件变成空壳；`open` 时又不会把 JSON 里的 cookie 注入回浏览器。`--profile` 直接用 Chrome 的持久化用户目录，cookie 实时写入磁盘 SQLite，开关浏览器都不会丢（详见踩坑 #16）。
@@ -104,24 +106,26 @@ agent-browser --session-name douyin screenshot <workspace>/douyin_qrcode_${TS}.p
 
 截图保存后，**必须立即调用 `present_files` 把该 PNG 展示给用户**（这是用户能看到二维码的唯一方式；只 `Read` 自己看或文字描述都无效）。展示后用中文提醒一句即可：「请用抖音 App 扫码登录，扫完告诉我」——**仅此一句，不要加任何补充说明**。
 
+> **注意**：扫码后登录流程可能包含「用户验证」步骤（短信验证码等，非必现）。扫完码后进入 Step 2 检测页面状态，若命中验证特征（`需在手机上进行确认` / `验证码` / `安全验证`），按 Step 2A 切有头浏览器让用户完成，不要反复刷新重扫码。
+
 ### Step 2：判断是否已登录（DOM 读取法，不用接口判定）
 
 **关键教训（实测踩坑）**：`get url` / `get title` **不可靠**——登录页和后台都显示 `creator.douyin.com` 与标题「抖音创作者中心」，单看这两个字段会被骗（首次实战就因此误以为已登录、接口却空）。**判断是否登录唯一稳妥的办法是读页面 DOM 文本/结构**，看页面到底是登录页还是后台面板。**不要依赖接口或 URL 推断登录态。**
 
-用户说「扫完了」后，用 `eval` 读 `document.body.innerText`，命中登录页特征字（「扫码登录 / 验证码登录 / 密码登录」）即为未登录，命中后台特征字（「数据概览 / 数据看板 / 作品数据 / 粉丝」等）即为已登录：
+用户说「扫完了」后，用 `eval` 读 `document.body.innerText`，命中登录页特征字（「扫码登录 / 验证码登录 / 密码登录」）即为未登录，命中后台特征字（「数据概览 / 数据看板 / 作品数据 / 粉丝」等）即为已登录。**同时检测「用户验证」特征**（`需在手机上进行确认` / `请输入验证码` / `验证码已发送` / `安全验证`）——扫码后可能走到这一步：
 
 ```bash
-# 刷新，确保拿到最新登录态
-agent-browser --session-name douyin reload
-agent-browser wait 1000
-
-# 读 DOM：判断是登录页还是后台（核心判断逻辑）
+# 读取 DOM：判断是登录页 / 验证步骤 / 后台（核心判断逻辑）
 agent-browser --session-name douyin eval "(() => {
   const t = document.body.innerText;
   const isLoginPage = /扫码登录|验证码登录|密码登录|账号密码登录|打开「?抖音APP」?点击左上角/.test(t);
+  const needConfirm = /需在手机上进行确认/.test(t);
+  const needVerify = /请输入验证码|验证码已发送|短信验证码|安全验证|滑动验证|图形验证/.test(t);
   const hasDashboard = /数据概览|数据看板|数据中心|作品数据|粉丝分析|近7日|播放量|互动数据/.test(t);
   return JSON.stringify({
     isLoginPage,
+    needConfirm,
+    needVerify,
     hasDashboard,
     title: document.title,
     url: location.href,
@@ -130,7 +134,9 @@ agent-browser --session-name douyin eval "(() => {
 })()"
 ```
 
-判断规则：
+判断规则（按优先级）：
+- `needConfirm === true` → 用户已扫码、等手机确认 → 提醒用户「请在手机上点确认登录」；确认后重新读 DOM。
+- `needVerify === true` → 需要短信验证码等用户验证 → **切有头浏览器**，走 Step 2A。
 - `isLoginPage === true` → 仍在登录页（二维码过期 / 没扫到）。重新 Step 1 截图给用户，并提醒重新扫。
 - `hasDashboard === true` → 已进入后台，继续 Step 3 取数。
 - 两者都为 false（如 loading 中）→ 再 `wait` 几秒或 `reload` 一次重试；仍不行再用 `snapshot -i` 看具体 DOM。
@@ -139,6 +145,30 @@ agent-browser --session-name douyin eval "(() => {
 ```bash
 agent-browser --session-name douyin eval "!!document.querySelector('canvas, [class*=qrcode], [class*=login]')"
 ```
+
+### Step 2A：用户验证兼容（短信验证码，非必现但必须处理）
+
+**背景（2026-08-14 实测）**：扫码登录后，登录流程可能包含「用户验证」步骤——页面弹出短信验证码输入（或安全验证/滑块）。**这不是每次登录都出现**，但一旦出现，无头模式用户无法操作，必须切到有头浏览器让用户直接看窗口完成。**不要反复刷新重扫码**——验证步骤是扫码成功后的正常流程，刷新反而打断。
+
+**检测特征词**（DOM 文本，见 Step 2 的 eval）：
+- `需在手机上进行确认` —— 已扫码、等手机点「确认登录」
+- `请输入验证码` / `验证码已发送` / `短信验证码` —— 短信验证码步骤
+- `安全验证` / `滑动验证` / `图形验证` —— 其他风控验证
+
+**处理流程**：
+1. 检测到验证特征（`needConfirm` / `needVerify`）→ 调用切有头脚本（同一 `--profile`，登录进度不丢）：
+```bash
+bash scripts/headed_login_douyin.sh   # 输出 HEADED_BROWSER_READY = 窗口已就绪
+```
+2. 有头浏览器窗口弹出（用户屏幕上可见）→ 让用户直接看窗口操作：点「确认登录」、收短信、输入验证码。
+3. 用户完成验证后，重新读 DOM（Step 2 的 eval）：`hasDashboard === true` 就继续 Step 3 取数；仍在验证步骤就再等几秒重读，**不要刷新页面**。
+
+**给用户的话**（少数允许的引导，保持极简）：「请在刚弹出的浏览器窗口中完成验证码验证，完成后告诉我。」
+
+**关键机制**（写死在 `headed_login_douyin.sh` 里）：
+- `AGENT_BROWSER_HEADED=1` 必须在 daemon 启动前设置；切有头 = 先 `close --all` 杀旧 daemon → 再带环境变量重新 `open`（见踩坑 #20）。
+- 若当前已是可见有头模式，脚本直接复用、不杀 daemon，避免打断正在验证的用户。
+- 脚本自动用 `pgrep -f "Chrome for Testing"` 确认窗口真的可见（无 `--headless` 参数）。
 
 ### Step 3：导航到目标页面取数
 
@@ -481,3 +511,9 @@ agent-browser --session-name douyin close --all
 17. **代理冲突导致浏览器打不开**：用户环境可能有 `HTTP_PROXY=http://127.0.0.1:7890/`（Clash 等代理工具），agent-browser 的 Chromium 不支持 HTTP 代理，直接 `ERR_NO_SUPPORTED_PROXIES` 报错、页面打不开。脚本会误以为登录态失效、反复要求扫码。**解决方案**：所有脚本开头必须 `export HTTP_PROXY="" HTTPS_PROXY="" http_proxy="" https_proxy="" ALL_PROXY=""`。抖音是国内站点，绕过代理不影响访问。AI agent 手动执行 agent-browser 命令时也要带上这些环境变量。
 
 18. **`--profile` 是持久化正解，`--session-name` 不是**：`agent-browser --help` 显示 `--profile <name|path>` 参数——指定一个 Chrome profile 目录，就是真正的持久化浏览器配置（cookie、localStorage、缓存全部自动保存在磁盘上）。`--session-name` 只是"临时上下文 + 手动存取 cookie"的方案，存取机制有 bug（见 #16）。所有脚本已统一改用 `AGENT_BROWSER_PROFILE` 环境变量 + `--session-name douyin`（后者仅用于连接同一 daemon，不再依赖其 cookie 存取）。
+
+19. **扫码后可能需要「用户验证」（短信验证码），无头模式必须切有头**（2026-08-14 实测）：用户扫码并在手机点「确认」后，页面仍可能停在验证步骤——弹出短信验证码输入。**这不是必然出现，但必须兼容**：反复刷新/重扫码会打断流程（曾因此把已验证的流程打断，用户二次扫码仍不同步）。**正确做法**：检测到验证特征（`需在手机上进行确认` / `请输入验证码` / `验证码已发送` / `安全验证`）→ 调 `scripts/headed_login_douyin.sh` 切有头浏览器 → 用户直接看窗口完成验证。`--profile` 持久化保证切有头不丢登录进度。
+
+20. **`AGENT_BROWSER_HEADED=1` 必须在 daemon 启动前设置，临时加环境变量无效**（2026-08-14 实测）：daemon 已在无头模式启动后，后续命令即使带 `AGENT_BROWSER_HEADED=1`，Chrome 进程仍是 `--headless=new`，窗口根本不出现。**切有头 = 先 `agent-browser close --all` 杀掉 daemon → 再带 `AGENT_BROWSER_HEADED=1` 重新 `open`**。验证是否真有头：`pgrep -fl "Chrome for Testing"` 看进程参数里有没有 `--headless`（有 = 无头，无 = 有头）。`headed_login_douyin.sh` 已封装此逻辑。
+
+21. **浏览器 daemon 会僵死（CDP response channel closed），扫码期间必须保活**（2026-08-14 实测）：长时间运行的 daemon 可能内核失联——表现：页面标签变 `about:blank`、二维码轮询停止、扫码确认不同步（用户在手机上确认了，页面没反应）。**诊断**：`agent-browser doctor`，若 Launch test 报 `CDP response channel closed` 即僵死。**处理**：`close --all` 后重新 `open`。**预防**：扫码等待期间，后台守护轮询只是「检测」不是「保活」——daemon 挂了它不会自己重启；等待登录成功期间若长时间无动静，先 `agent-browser doctor` 检查 daemon 是否还活着，再决定是否重开，不要盲目刷新页面。

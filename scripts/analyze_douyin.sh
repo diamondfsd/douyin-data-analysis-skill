@@ -32,7 +32,15 @@ OUT="$WS/douyin_analysis_${TS}"
 mkdir -p "$OUT"
 
 echo "==> [1/3] 恢复登录态（无扫码优先）"
-bash "$SCRIPT_DIR/restore_douyin_login.sh" || { echo "登录失败，请先扫码登录。"; exit 1; }
+if ! bash "$SCRIPT_DIR/restore_douyin_login.sh"; then
+  rc=$?
+  if [ "$rc" -eq 3 ]; then
+    echo "NEED_USER_VERIFY：登录需用户验证（短信验证码等），请先运行 scripts/headed_login_douyin.sh 切有头浏览器让用户完成验证，再重跑本脚本。"
+  else
+    echo "登录失败，请先扫码登录。"
+  fi
+  exit 1
+fi
 
 # 首页会同时请求 overview/all 和 item/list。复用登录恢复时已经打开的首页；
 # 仅当资源记录不存在时才重新加载，然后复用签名 URL 发起同源 fetch。

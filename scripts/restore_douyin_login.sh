@@ -8,6 +8,8 @@
 # 退出码：
 #   0  = 已登录
 #   2  = 未登录，需用户扫码
+#   3  = 登录流程中，需用户验证（短信验证码/安全验证）——须切有头浏览器，
+#        见 SKILL.md Step 2A 与 scripts/headed_login_douyin.sh
 #
 # 用法： bash scripts/restore_douyin_login.sh
 # ============================================================================
@@ -21,16 +23,27 @@ export HTTP_PROXY="" HTTPS_PROXY="" http_proxy="" https_proxy="" ALL_PROXY=""
 export AGENT_BROWSER_PROFILE="$HOME/.agent-browser/profiles/douyin"
 SESSION="douyin"
 
-# 判断是否已登录（DOM 文本法，不依赖 URL/title）
-is_login() {
-  local out
-  out=$(agent-browser --session-name "$SESSION" eval "(() => {
+# 读取页面状态（DOM 文本法，不依赖 URL/title）：
+#   logged     是否已登录
+#   needVerify 是否处于「用户验证」步骤（短信验证码/安全验证）
+page_state() {
+  agent-browser --session-name "$SESSION" eval "(() => {
     const t = document.body.innerText || '';
     const logged = /数据概览|数据看板|数据中心|作品数据|粉丝分析|账号全景/.test(t)
                && !/扫码登录|验证码登录|密码登录|账号密码登录/.test(t);
-    return logged ? 'true' : 'false';
-  })()" 2>/dev/null)
-  [[ "$out" == *"true"* ]]
+    const needVerify = /需在手机上进行确认|请输入验证码|验证码已发送|短信验证码|验证码登录|安全验证|滑动验证|图形验证/.test(t);
+    return JSON.stringify({logged, needVerify});
+  })()" 2>/dev/null
+}
+
+# 判断是否已登录
+is_login() {
+  [[ "$(page_state)" == *'"logged":true'* ]]
+}
+
+# 判断是否处于用户验证步骤
+is_verify_pending() {
+  [[ "$(page_state)" == *'"needVerify":true'* ]]
 }
 
 # 页面可能仍在渲染；短轮询 DOM
@@ -51,6 +64,12 @@ agent-browser --session-name "$SESSION" open "https://creator.douyin.com/creator
 if wait_for_login; then
   echo "ALREADY_LOGGED_IN"
   exit 0
+fi
+
+# 3) 未登录但处于「用户验证」步骤（短信验证码/安全验证）→ 须切有头浏览器让用户完成
+if is_verify_pending; then
+  echo "NEED_USER_VERIFY"
+  exit 3
 fi
 
 echo "NEED_QR_SCAN"
