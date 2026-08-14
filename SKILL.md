@@ -202,6 +202,8 @@ agent-browser --session-name douyin click <menuitem_ref>
 
 抖音创作者中心的运营数据通过官方接口返回（即页面上你正常看到的那些数字的来源），直接从浏览器网络请求中拿到原始响应体，比任何 DOM 解析都省事且完整。
 
+> **取数方式铁律（2026-08-14 重构，用户明确要求）**：取数一律用**抓包页面自身请求**（network 命令），**禁止 eval 注入脚本、禁止 fetch 重放接口**。原因见踩坑 #23——抖音风控会拦截裸 fetch（`status_code:8 用户未登录`），只有 reload 让页面自己带着风控参数（`msToken`/`a_bogus`）发的同源请求才能取到数据；同时用户要求所有浏览器操作走 agent-browser 原生方法（snapshot/click/network），不用 eval 注入。操作顺序固定为：`network requests --clear` → `reload`（或 open 目标页）→ `network requests --filter` 找 requestId → `network request <rid> --json` 取响应体（`analyze_douyin.sh` 已实现，勿改回 eval+fetch）。
+
 ```bash
 # 1) 先清日志，再触发/刷新目标页，确保拿到干净请求
 agent-browser --session-name douyin network requests --clear
@@ -285,7 +287,7 @@ WS=<输出目录> bash scripts/fetch_douyin_comments.sh \
   | `digg` | 点赞 |
   | `comment` | 评论 |
   | `share` | 分享 |
-  | `fans` | 粉丝总量（累计统计） |
+  | `fans` | 粉丝总量（累计统计） | ⚠️ **`current_count` 是累计口径（实测 11587，不可用）**；真实粉丝数从 `option_list[]` 取末日 `count`（详见踩坑 #24） |
   | `new_fans` | 净增粉丝 |
   | `cancel_fans` | 取关粉丝 |
   | `profile` | 主页访问 |
@@ -519,3 +521,9 @@ agent-browser --session-name douyin close --all
 21. **浏览器 daemon 会僵死（CDP response channel closed），扫码期间必须保活**（2026-08-14 实测）：长时间运行的 daemon 可能内核失联——表现：页面标签变 `about:blank`、二维码轮询停止、扫码确认不同步（用户在手机上确认了，页面没反应）。**诊断**：`agent-browser doctor`，若 Launch test 报 `CDP response channel closed` 即僵死。**处理**：`close --all` 后重新 `open`。**预防**：扫码等待期间，后台守护轮询只是「检测」不是「保活」——daemon 挂了它不会自己重启；等待登录成功期间若长时间无动静，先 `agent-browser doctor` 检查 daemon 是否还活着，再决定是否重开，不要盲目刷新页面。
 
 22. **`agent-browser eval` 的返回值是 JSON 字符串（带转义），shell 子串匹配会永远失败**（2026-08-14 实测，restore 脚本误判的根因）：eval 返回形如 `✓ Done\n"{\"logged\":true,\"needVerify\":false}"`——整个对象被包成**带反斜杠转义的字符串**，因此脚本里 `[[ "$out" == *'"logged":true'* ]]` 这种无转义子串**永远匹配不上**，导致「页面明明已登录却判定 NEED_QR_SCAN」。**正确做法**：eval 直接返回明文（如 `document.body.innerText`），shell 用 `*"数据中心"*` 这类纯文本 contains 匹配；或用 `document.readyState + '|' + length` 拼接明文再解析。配套：判定登录态前必须等页面渲染完成（`readyState=complete` 且 body≥200 字符），无头模式新开 daemon 时 SPA 加载慢，不等就判定会把「加载中」误判成「未登录」。
+
+23. **不要用 eval+fetch 重放接口取数，抖音风控拦截裸 fetch**（2026-08-14 实测，取数全失败的根因）：旧版 `analyze_douyin.sh` 用 eval 从页面找接口 URL 后自己 `fetch()` 重放——即使页面已登录，抖音接口对裸 fetch 返回 `status_code:8 用户未登录`，取数全部失败。**根因**：抖音接口要求浏览器页面自身发出的、带风控参数（`msToken`/`a_bogus`/`X-Bogus`）的同源签名请求；脚本重放既无签名也不带风控上下文。**正确做法（当前实现）**：抓包页面自身请求——`network requests --clear` → `reload` 触发页面自己发请求 → `network requests --filter "overview/all|item/list"` 找 requestId → `network request <rid> --json` 取响应体。全程零 eval 注入、零 fetch 重放，只用 agent-browser 原生 network 命令。响应体信封固定为 `{"data":{"responseBody":...}}`（body 可能是 JSON 字符串或已解析对象，解析时先判 `isinstance(body, str)`）。
+
+24. **`overview/all` 的 `fans.current_count` 是累计口径（不可用），真实粉丝数从 `fans.option_list` 取末日值**（2026-08-14 实测）：`fans.current_count` 返回的是账号历史累计关注数（实测 11587），与页面显示的粉丝数完全对不上；`fans.option_list[]` 才是逐日粉丝数（`{date, count, ...}`），取数组末日 `count` 即当前真实粉丝（实测 1763/1794 与页面一致）。脚本已内置该修正逻辑。**通用教训**：接口字段先跟页面核对口径再用于分析，别盲信 `current_count`。
+
+25. **登录态判断一律以 DOM/snapshot 为准；接口返回「用户未登录」可能是风控误判**（2026-08-14 实测）：fetch 重放时代接口报 `status_code:8`，而 DOM 显示已登录——此时**不要**据此判断会话失效。判定会话是否真失效的唯一标准：reload 后页面是否回到登录页（SPA 内存态假象：snapshot 显示账号/粉丝数都在，但接口全拒，reload 后变登录页才是真失效）。所有取数与登录态判断都走 DOM/network 抓包，不碰裸 fetch。
