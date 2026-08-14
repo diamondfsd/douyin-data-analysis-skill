@@ -42,42 +42,51 @@ if ! bash "$SCRIPT_DIR/restore_douyin_login.sh"; then
   exit 1
 fi
 
-# 首页会同时请求 overview/all 和 item/list。复用登录恢复时已经打开的首页；
-# 仅当资源记录不存在时才重新加载，然后复用签名 URL 发起同源 fetch。
-wait_for_endpoint() {
-  local filter="$1" found=""
-  for _ in 1 2 3 4 5 6 7 8; do
-    found=$(agent-browser --session-name "$SESSION" eval \
-      "performance.getEntriesByType('resource').some(e => e.name.includes('$filter'))" 2>/dev/null || true)
-    if [[ "$found" == *"true"* ]]; then
-      return 0
-    fi
-    sleep 0.5
-  done
-  return 1
+# 取数方式（2026-08-14 重构）：不再 eval+fetch 重放接口（抖音风控会拦截裸 fetch，
+# 返回 status_code:8 用户未登录），改为【抓包页面自身发出的请求响应】——
+# reload 页面 → 页面自己带风控参数（msToken/a_bogus）请求数据接口 →
+# 用 network requests 找 requestId → network request 取响应体。
+# 只使用 agent-browser 原生 network 命令，不注入任何 eval 脚本。
+#
+# 注意：network request 输出的 JSON 结构与脚本解析兼容：
+#   {"data": {"responseBody": "..."}}
+ensure_home_loaded() {
+  # 打开首页（已打开则幂等无副作用）；等待页面发出数据请求
+  agent-browser --session-name "$SESSION" open "https://creator.douyin.com/creator-micro/home" >/dev/null 2>&1
+  agent-browser --session-name "$SESSION" wait 3000
 }
 
-has_core_requests=$(agent-browser --session-name "$SESSION" eval \
-  "['overview/all', 'item/list'].every(f => performance.getEntriesByType('resource').some(e => e.name.includes(f)))" \
-  2>/dev/null || true)
-if [[ "$has_core_requests" != *"true"* ]]; then
-  agent-browser --session-name "$SESSION" open "https://creator.douyin.com/creator-micro/home" >/dev/null 2>&1
-fi
+find_request_id() {
+  # 从 network 日志中找最新一条匹配 filter 的请求 id
+  local filter="$1"
+  agent-browser --session-name "$SESSION" network requests --filter "$filter" --json 2>/dev/null | "$PYTHON_BIN" -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+items = data.get('requests') or data.get('items') or data.get('data') or []
+if isinstance(items, dict):
+    items = items.get('requests') or items.get('items') or []
+if items:
+    print(items[-1].get('requestId', ''))
+"
+}
 
 grab() {
-  local filter="$1" out="$2"
-  if ! wait_for_endpoint "$filter"; then
-    echo "    [警告] 未找到接口: $filter"
+  local filter="$1" out="$2" rid="" i
+  # 等待页面自身发出的请求出现在 network 日志
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    rid=$(find_request_id "$filter")
+    [ -n "$rid" ] && break
+    agent-browser --session-name "$SESSION" wait 1000
+  done
+  if [ -z "$rid" ]; then
+    echo "    [警告] 未找到接口请求: $filter"
     return 1
   fi
 
-  agent-browser --session-name "$SESSION" eval "(async () => {
-    const urls = performance.getEntriesByType('resource')
-      .map(e => e.name)
-      .filter(url => url.includes('$filter'));
-    const response = await fetch(urls[urls.length - 1], {credentials: 'include'});
-    return {data: {responseBody: await response.text()}};
-  })()" > "$out"
+  agent-browser --session-name "$SESSION" network request "$rid" --json > "$out" 2>/dev/null
 
   if "$PYTHON_BIN" - "$out" <<'PY'
 import json, sys
@@ -89,13 +98,18 @@ json.loads(body) if isinstance(body, str) else body
 PY
   then
     echo "    抓取成功: $out"
+    return 0
   else
     echo "    [警告] 接口响应无有效数据: $filter"
     return 1
   fi
 }
 
-echo "==> [2/3] 抓取 overview/all + item/list"
+echo "==> [2/3] 抓取 overview/all + item/list（抓包页面自身请求）"
+ensure_home_loaded
+agent-browser --session-name "$SESSION" network requests --clear >/dev/null 2>&1
+agent-browser --session-name "$SESSION" reload >/dev/null 2>&1
+agent-browser --session-name "$SESSION" wait 8000
 grab "overview/all" "$OUT/overview.json"
 grab "item/list"    "$OUT/items.json"
 
