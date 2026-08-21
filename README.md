@@ -1,120 +1,77 @@
 # 抖音数据分析 Skill
 
-基于 `agent-browser` 的抖音创作者中心数据自动化读取与分析工作流。适用于任何支持浏览器自动化的 AI Agent 平台。
+基于 `ego-browser` 直接操作抖音创作者中心的分析工作流。登录态和页面状态由 ego-browser task space 保存；AI agent 在同一任务空间中完成登录、刷新、取数和验证，不依赖 profile、cookie 文件或常驻 daemon。
 
-## 功能
+## 目录
 
-- 自动恢复登录态（`--profile` 持久化浏览器目录，cookie 自动保存，免扫码优先）
-- 单次加载首页并抓取创作者中心官方接口原始数据（播放/点赞/评论/分享/粉丝等核心指标 + 逐视频明细）
-- 输入创作者中心作品评论页链接，自动滚动加载并读取最近 200 条评论（可自定义上限），保留原始响应和结构化评论结果
-- AI 读取数据后生成完整的 HTML 单页分析报告（含 Chart.js 图表、TOP5 排名、逐视频分析、数据驱动的优化建议）
-- HTML 生成后直接交付，不做截图、读图或多尺寸视觉验收
-
-## 目录结构
-
-```
+```text
 douyin-data-analysis-skill/
-├── SKILL.md              # 技能主文件（完整工作流 + 字段参考 + 踩坑记录）
-├── README.md             # 本文件
-├── scripts/
-│   ├── analyze_douyin.sh        # 一键取数脚本（恢复登录 → 抓接口 → 汇总 JSON）
-│   ├── fetch_douyin_comments.sh # 指定作品评论页取数（滚动加载 → 原始响应 → 评论 JSON）
-│   └── restore_douyin_login.sh  # 登录态恢复脚本（--profile 持久化，免扫码优先）
-├── assets/               # 静态资源（预留）
-└── references/           # 参考文档（预留）
+├── SKILL.md
+├── README.md
+└── scripts/
+    ├── analyze_douyin.sh          # 离线归一化首页原始 JSON
+    └── fetch_douyin_comments.sh   # 离线归一化评论原始 JSON
 ```
 
-## 前置依赖
+## 依赖
 
-- [agent-browser](https://www.npmjs.com/package/agent-browser)（浏览器自动化 CLI）
-  ```bash
-  npm install -g agent-browser
-  ```
-- Python 3（用于数据汇总脚本）
-- 抖音创作者账号（需扫码登录一次）
+- 已配置的 `ego-browser` 运行环境。
+- Python 3，用于离线 JSON 归一化。
+- 用户自己的抖音创作者中心账号。
 
-## 平台适配
+## 正确的浏览器用法
 
-本技能的核心是两个 Shell 脚本（取数 + 登录恢复）和一个 SKILL.md（工作流定义），不绑定特定平台。`SKILL.md` 中描述的 AI 分析步骤（Step 5）是通用逻辑，任何能读文件、写 HTML 的 AI Agent 都能执行。
-
-| 平台 | 接入方式 |
-|------|---------|
-| **WorkBuddy** | 将目录放入 `~/.workbuddy/skills/douyin-data-analysis/`，对话中触发即可 |
-| **Claude Code / Cursor / Windsurf 等** | 将 `SKILL.md` 作为自定义指令或 system prompt 加载，脚本路径用绝对路径引用 |
-| **其他 Agent 框架**（LangChain / AutoGPT 等） | 把 `SKILL.md` 作为 task description 注入，调用脚本获取 `douyin_data.json` 后交给 LLM 分析 |
-| **纯命令行** | 手动跑脚本取数，自行用 `douyin_data.json` 做分析 |
-
-> **注意**：`SKILL.md` 中部分内容（如 `present_files` 工具调用、交互红线规范）是 WorkBuddy 环境特有的。在其他平台使用时，这些部分可忽略或替换为对应平台的文件展示/用户交互机制，核心取数脚本不受影响。
-
-## 使用方式
-
-### 方式一：作为 AI Agent 技能使用
-
-将 `SKILL.md` 加载到你的 AI Agent 上下文中，然后直接说「帮我分析抖音数据」，Agent 会按工作流自动完成取数和分析。
-
-### 方式二：纯命令行独立使用
+首次打开时创建一个短名称任务空间，并记住返回的数字 ID：
 
 ```bash
-# 1. 恢复登录态（首次需扫码）
-bash scripts/restore_douyin_login.sh
-
-# 2. 一键取数
-WS=./output bash scripts/analyze_douyin.sh
-
-# 3. 读取 output/douyin_analysis_*/douyin_data.json 进行分析
+ego-browser nodejs <<'EOF'
+const task = await useOrCreateTaskSpace('douyin data analysis')
+await openOrReuseTab('https://creator.douyin.com/creator-micro/home', { wait: true, timeout: 30 })
+cliLog(JSON.stringify({ taskId: task.id, page: await pageInfo() }))
+cliLog(await snapshotText())
+EOF
 ```
 
-### 读取指定作品的评论
-
-复制创作者中心的作品评论页链接后直接执行。脚本默认取最近 200 条一级评论，第二个参数可设为 1 到 1000。
+后续刷新、扫码后检查、重试和取数都复用这个 ID：
 
 ```bash
-WS=./output bash scripts/fetch_douyin_comments.sh \
-  'https://creator.douyin.com/creator-micro/interactive/comment?item_id=7672002224478918574&enter_from=content_manage_v2'
-
-# 例如最多取 500 条
-WS=./output bash scripts/fetch_douyin_comments.sh '<作品评论页链接>' 500
+ego-browser nodejs <<'EOF'
+const task = await useOrCreateTaskSpace(123)
+await gotoAndWait('https://creator.douyin.com/creator-micro/home', { timeout: 30, settle: 2 })
+cliLog(await snapshotText())
+EOF
 ```
 
-结果写入 `output/douyin_comments_*/`：
+如果用户接管了浏览器，必须等用户明确说继续，再从 `takeOverTaskSpace(123)` 开始。二维码或验证截图返回后直接展示给用户，不要重建任务空间或运行恢复脚本。
 
-| 文件 | 说明 |
-|------|------|
-| `comment_requests.json` | 页面加载过程中捕获的评论相关请求记录 |
-| `raw/` | 浏览器已完成请求的原始响应 |
-| `comments.json` | 去重后的结构化一级评论，供分析使用 |
+## 数据流程
 
-脚本仅接受 `creator.douyin.com` 的作品评论页链接。页面以滚动方式加载，脚本会等待请求不再增加后停止；当作品评论不足或页面未加载完整时，`comments.json` 的 `meta.returned_count` 会小于请求上限。
+在 ego-browser heredoc 内：
 
-取数完成后，`douyin_data.json` 包含结构化的核心指标和逐视频明细，你可以：
-- 交给任意 LLM（ChatGPT / Claude / DeepSeek 等）生成分析报告
-- 用 Python / Excel 自行做数据可视化
-- 导入 BI 工具做长期跟踪
+1. `snapshotText()` 和 DOM 文本确认登录状态。
+2. 登录成功后，`Network.enable`、`drainEvents()`，再用 `gotoAndWait` 刷新首页。
+3. 从页面自身的 `Network.responseReceived` 事件筛选总览和作品响应。
+4. 用 `Network.getResponseBody` 读取响应体并写入 `overview.json`、`items.json`。
+5. 运行离线归一化脚本。
 
-## 数据来源
+```bash
+RAW_DIR=/absolute/path/to/douyin_analysis_YYYYMMDD_HHMMSS \
+  bash scripts/analyze_douyin.sh
+```
 
-所有数据均通过**抖音创作者中心官方页面**（creator.douyin.com）读取，用户需自行扫码登录、以本人身份访问自己账号的数据。不涉及任何接口破解、反爬绕过或越权访问。
+输出 `douyin_data.json`，并将数据和作品原始响应存档到 `douyin_archive/`。
 
-## 输出说明
+评论页同样直接由 ego-browser 打开和滚动，原始响应写入 `comment_response_*.json` 后运行：
 
-| 文件 | 说明 |
-|------|------|
-| `overview.json` | overview/all 接口原始响应 |
-| `items.json` | item/list 接口原始响应 |
-| `douyin_data.json` | 汇总后的结构化数据（AI 分析的主输入） |
-| `comments.json` | 指定作品的结构化一级评论（默认最多 200 条） |
+```bash
+RAW_DIR=/absolute/path/to/douyin_comments_YYYYMMDD_HHMMSS \
+  bash scripts/fetch_douyin_comments.sh \
+  'https://creator.douyin.com/creator-micro/interactive/comment?item_id=7672002224478918574&enter_from=content_manage_v2' \
+  200
+```
 
-## 技术要点
+输出 `comments.json`，默认保留最多 200 条去重后的一级评论。完整的浏览器 heredoc、刷新、交接、CDP 取数和报告要求见 [SKILL.md](SKILL.md)。
 
-- **登录态持久化**：使用 `--profile` 持久化浏览器目录（`~/.agent-browser/profiles/douyin`），cookie/localStorage 自动实时写入磁盘，跟正常 Chrome 一样。一次扫码后只要 cookie 没过期就不用再扫
-- **代理豁免**：所有脚本开头 `export HTTP_PROXY=""`，避免 agent-browser 的 Chromium 报 `ERR_NO_SUPPORTED_PROXIES`
-- **快速取数**：首页只加载一次，两个核心接口出现后立即抓取，不使用重复导航和固定 5 秒等待
-- **数据提取优先级**：原始 JSON > DOM 解析；除登录二维码外不截图
-- **直接交付**：生成 HTML 后直接返回文件，不重新打开、不截图、不读图、不做重复验收
-- **关键接口**：`overview/all`（首页数据总览）、`item/list`（作品列表）
-- **评论读取**：滚动作品评论页面，读取浏览器已完成的评论列表响应；不拼接、猜测或重放接口请求
-- **比率类指标**：JSON 中为小数（如 0.2174），展示时需 ×100 转百分比
+## 安全边界
 
-## License
-
-MIT
+只读取用户本人在 `creator.douyin.com` 创作者中心可见的数据。不猜测或重放接口，不使用 `fetch` 绕过页面，不自动回复或批量互动，不保存或导出 cookie。
