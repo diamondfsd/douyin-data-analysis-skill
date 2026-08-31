@@ -1,8 +1,11 @@
-# Analysis output (not part of the skill)
+# Personal Douyin data and generated reports (never versioned)
+# Raw responses, normalized data, reports, covers, and archives belong here.
+output/
+
+# Legacy root-level output paths
 douyin_analysis_*/
 douyin_archive/
 douyin_comments_*/
-output/
 
 # QR code screenshots (contain login session info)
 douyin_qrcode_*.png

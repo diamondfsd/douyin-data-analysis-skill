@@ -5,6 +5,12 @@ description: 抖音数据分析与复盘工作流。通过 ego-browser 直接操
 
 # 抖音数据分析与复盘
 
+## 个人数据与输出目录
+
+报告、封面、原始响应、归一化数据和历史归档都可能包含用户本人的抖音运营数据，属于个人数据。它们只作为本地分析产物保存，默认不做 Git 版本管理。
+
+所有生成的文件和文件夹统一写入项目根目录的 `output/`；不要把个人数据写入源码目录或提交到版本库。`output/` 已加入 `.gitignore`，历史根目录输出路径的忽略规则也保留用于兼容旧数据。
+
 ## 核心原则
 
 浏览器由 AI agent 直接控制，任务空间是唯一的浏览器状态来源：
@@ -116,7 +122,7 @@ EOF
 ego-browser nodejs <<'EOF'
 const fs = await import('node:fs/promises')
 const task = await useOrCreateTaskSpace(123)
-const outDir = '/absolute/path/to/douyin_analysis_YYYYMMDD_HHMMSS'
+const outDir = '/absolute/path/to/output/douyin_analysis_YYYYMMDD_HHMMSS'
 await fs.mkdir(outDir, { recursive: true })
 
 await cdp('Network.enable', {})
@@ -171,11 +177,11 @@ EOF
 然后运行离线归一化：
 
 ```bash
-RAW_DIR=/absolute/path/to/douyin_analysis_YYYYMMDD_HHMMSS \
+RAW_DIR=/absolute/path/to/output/douyin_analysis_YYYYMMDD_HHMMSS \
   bash scripts/analyze_douyin.sh
 ```
 
-该脚本只读取 `overview.json` 和 `items.json`，生成同目录的 `douyin_data.json`，并写入 `douyin_archive/` 历史存档。
+该脚本只读取 `overview.json` 和 `items.json`，生成同目录的 `douyin_data.json`，并写入 `output/douyin_archive/` 历史存档。
 
 ## 评论读取
 
@@ -186,7 +192,7 @@ ego-browser nodejs <<'EOF'
 const fs = await import('node:fs/promises')
 const task = await useOrCreateTaskSpace('douyin comments analysis')
 const pageUrl = 'https://creator.douyin.com/creator-micro/interactive/comment?item_id=7672002224478918574&enter_from=content_manage_v2'
-const outDir = '/absolute/path/to/douyin_comments_YYYYMMDD_HHMMSS'
+const outDir = '/absolute/path/to/output/douyin_comments_YYYYMMDD_HHMMSS'
 await fs.mkdir(`${outDir}/raw`, { recursive: true })
 
 await cdp('Network.enable', {})
@@ -253,7 +259,7 @@ EOF
 之后运行离线归一化，默认最多保留 200 条一级评论：
 
 ```bash
-RAW_DIR=/absolute/path/to/douyin_comments_YYYYMMDD_HHMMSS \
+RAW_DIR=/absolute/path/to/output/douyin_comments_YYYYMMDD_HHMMSS \
   bash scripts/fetch_douyin_comments.sh \
   'https://creator.douyin.com/creator-micro/interactive/comment?item_id=7672002224478918574&enter_from=content_manage_v2' \
   200

@@ -8,10 +8,13 @@
 douyin-data-analysis-skill/
 ├── SKILL.md
 ├── README.md
-└── scripts/
-    ├── analyze_douyin.sh          # 离线归一化首页原始 JSON
-    └── fetch_douyin_comments.sh   # 离线归一化评论原始 JSON
+├── scripts/
+│   ├── analyze_douyin.sh          # 离线归一化首页原始 JSON
+│   └── fetch_douyin_comments.sh   # 离线归一化评论原始 JSON
+└── output/                         # 个人数据和生成报告（不纳入版本管理）
 ```
+
+`output/` 中的原始响应、归一化数据、报告、封面和历史归档属于个人数据，默认不做 Git 版本管理。所有采集和分析产物都应写入该目录。
 
 ## 依赖
 
@@ -55,16 +58,16 @@ EOF
 5. 运行离线归一化脚本。
 
 ```bash
-RAW_DIR=/absolute/path/to/douyin_analysis_YYYYMMDD_HHMMSS \
+RAW_DIR=/absolute/path/to/output/douyin_analysis_YYYYMMDD_HHMMSS \
   bash scripts/analyze_douyin.sh
 ```
 
-输出 `douyin_data.json`，并将数据和作品原始响应存档到 `douyin_archive/`。
+输出 `douyin_data.json`，并将数据和作品原始响应存档到 `output/douyin_archive/`。
 
 评论页同样直接由 ego-browser 打开和滚动，原始响应写入 `comment_response_*.json` 后运行：
 
 ```bash
-RAW_DIR=/absolute/path/to/douyin_comments_YYYYMMDD_HHMMSS \
+RAW_DIR=/absolute/path/to/output/douyin_comments_YYYYMMDD_HHMMSS \
   bash scripts/fetch_douyin_comments.sh \
   'https://creator.douyin.com/creator-micro/interactive/comment?item_id=7672002224478918574&enter_from=content_manage_v2' \
   200
